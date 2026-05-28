@@ -2,3 +2,50 @@ __pycache__/
 .idea/
 *.pyc
 .blend1
+
+# Python environments and tooling caches
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs and temp files
+logs/
+*.log
+tmp/
+temp/
+
+# Datasets and large binary assets
+dataset/
+datasets/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.npy
+*.npz
+*.pkl
+
+# Model checkpoints and weights
+checkpoints/
+ckpts/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# Experiment outputs
+results/
+runs/
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db

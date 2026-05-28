@@ -1,9 +1,11 @@
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
+--extra-index-url https://download.pytorch.org/whl/cu117
 absl-py==2.1.0
 antlr4-python3-runtime==4.9.3
 cachetools==5.5.0
 certifi==2024.12.14
 charset-normalizer==3.4.0
-clip @ git+https://github.com/openai/CLIP.git@dcba3cb2e2827b402d2701e7e1c7d9fed8a20ef1
+clip @ git+https://gitcode.com/openai/CLIP.git@main
 einops==0.8.0
 ftfy==6.2.3
 google-auth==2.37.0
