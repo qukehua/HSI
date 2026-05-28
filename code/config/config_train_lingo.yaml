@@ -8,12 +8,12 @@ defaults:
       - pelvis
   - _self_
 
-exp_name: test
+exp_name: train5.28
 train: true
 load_state_dict: false
-batch_size: 128
+batch_size: 256
 lr: 0.0001
-epochs: 1000
+epochs: 300
 device: cuda:0
 ckpt_name: None
 use_tensorboard: true

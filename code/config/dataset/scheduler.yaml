@@ -1,4 +1,4 @@
-folder: ${oc.env:ROOT_DIR}/dataset
+folder: /data3/user/qkh/datasets/lingo
 device: ${device}
 batch_size: ${batch_size}
 step: 3
