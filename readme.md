@@ -80,13 +80,3 @@ python train_lingo.py
 The training script will automatically load the dataset, set up the model, and commence training sessions using the configurations in `./code/config` folder.
 
 
-# Citation
-```
-@inproceedings{jiang2024autonomous,
-  title={Autonomous character-scene interaction synthesis from text instruction},
-  author={Jiang, Nan and He, Zimo and Wang, Zi and Li, Hongjie and Chen, Yixin and Huang, Siyuan and Zhu, Yixin},
-  booktitle={SIGGRAPH Asia 2024 Conference Papers},
-  pages={1--11},
-  year={2024}
-}
-```
