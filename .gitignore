@@ -25,6 +25,7 @@ temp/
 # Datasets and large binary assets
 dataset/
 datasets/
+*.pdf
 *.zip
 *.tar
 *.tar.gz
