@@ -50,7 +50,7 @@ To run the code, you need to have the following installed:
     The generated human motion will be displayed in Blender.
 
 
-# Training
+# Training and Evaluation
 ## Overview
 
 This README provides instructions on setting up and training our model using the LINGO dataset.
@@ -79,4 +79,25 @@ python train_lingo.py
 
 The training script will automatically load the dataset, set up the model, and commence training sessions using the configurations in `./code/config` folder.
 
+## Model Evaluation
 
+
+#FID, Diversity, Multi-modality, Precision, Recall, F1
+```sh
+python evaluation.py ^
+  --generated ..\results\outputs\model.pkl ^
+  --reference gt ^
+  --metrics interactive ^
+  --smpl-dir ..\smpl_models
+```
+
+#Pene%, Pene mean, Pene max, Foot Sliding
+```sh
+python evaluation.py ^
+  --generated ..\results\outputs\model.pkl ^
+  --metrics locomotion ^
+  --smpl-dir ..\smpl_models ^
+  --scene-occ ..\dataset\Scene_vis ^
+  --compute-vertices ^
+  --body-points vertices
+```
