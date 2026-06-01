@@ -32,7 +32,7 @@ def train(cfg):
     print(f'Training on {device}', flush=True)
     print('Initializing Distributed', flush=True)
 
-    model = TimingModel(**cfg.model)
+    model = TimingModel(**cfg.model.scheduler)
     model.to(device)
     model.train()
 
