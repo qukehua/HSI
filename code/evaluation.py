@@ -1,4 +1,5 @@
 import argparse
+import ast
 import csv
 import glob
 import json
@@ -8,9 +9,19 @@ import pickle as pkl
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+try:
+    import yaml
+except Exception:  # pragma: no cover - PyYAML is listed in requirements.
+    yaml = None
+
+try:
+    from omegaconf import OmegaConf
+except Exception:  # pragma: no cover - hydra/omegaconf is listed in requirements.
+    OmegaConf = None
 
 try:
     from scipy import linalg
@@ -33,6 +44,7 @@ except Exception:  # pragma: no cover - smplx is needed only for SMPL-X files.
 DEFAULT_SCENE_GRID = (-4.0, 0.0, -6.0, 4.0, 2.0, 6.0, 400.0, 100.0, 600.0)
 DEFAULT_FOOT_JOINTS = (7, 8, 10, 11)
 DEFAULT_HAND_JOINTS = (20, 21, 25, 26, 27, 40, 49)
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "config_evaluation.yaml"
 
 
 @dataclass
@@ -47,10 +59,82 @@ class MotionSample:
     goal: Optional[np.ndarray] = None
 
 
-def parse_ints(value: Optional[str]) -> Tuple[int, ...]:
+def parse_ints(value) -> Tuple[int, ...]:
     if value is None or value == "":
         return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(int(item) for item in value)
     return tuple(int(item) for item in value.split(",") if item.strip())
+
+
+def load_config(path: Optional[str]) -> Dict:
+    if path is None:
+        return {}
+    config_path = Path(path)
+    if not config_path.exists():
+        return {}
+    if yaml is not None:
+        with config_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    elif OmegaConf is not None:
+        data = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True) or {}
+    else:
+        data = parse_simple_yaml(config_path)
+    if not isinstance(data, dict):
+        raise ValueError(f"Evaluation config must be a mapping: {config_path}")
+    return data
+
+
+def parse_simple_yaml(path: Path) -> Dict:
+    data = {}
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = strip_yaml_comment(line).strip()
+            if not line:
+                continue
+            if ":" not in line or line.startswith((" ", "-")):
+                raise RuntimeError(
+                    "Install PyYAML/OmegaConf for nested YAML configs. "
+                    f"The fallback parser only supports top-level key: value lines: {path}"
+                )
+            key, value = line.split(":", 1)
+            data[key.strip()] = parse_yaml_scalar(value.strip())
+    return data
+
+
+def strip_yaml_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    for idx, char in enumerate(line):
+        if char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+        elif char == "#" and not in_single and not in_double:
+            return line[:idx]
+    return line
+
+
+def parse_yaml_scalar(value: str):
+    if value == "" or value.lower() in ("null", "none", "~"):
+        return None
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    if value.startswith("[") and value.endswith("]"):
+        value = value.replace("null", "None").replace("true", "True").replace("false", "False")
+        return ast.literal_eval(value)
+    try:
+        if any(char in value for char in (".", "e", "E")):
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value.strip("'\"")
+
+
+def config_default(config: Dict, key: str, fallback):
+    return config.get(key, fallback)
 
 
 def as_float_array(value) -> Optional[np.ndarray]:
@@ -671,55 +755,79 @@ def print_metrics(metrics: Dict[str, Dict[str, float]]) -> None:
                 print(f"  {key}: {value:.6f}")
 
 
-def build_argparser() -> argparse.ArgumentParser:
+def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
+    config = config or {}
     parser = argparse.ArgumentParser(
         description="Evaluate LINGO/HSI motion generations with the metrics used in Jiang et al. 2024."
     )
-    parser.add_argument("--generated", nargs="+", required=True, help="Generated pkl/npz/npy files, directories, or globs.")
-    parser.add_argument("--reference", nargs="*", default=None, help="Reference motions/features for FID and P/R/F1.")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="YAML config file. CLI arguments override it.")
+    parser.add_argument(
+        "--generated",
+        nargs="+",
+        default=config_default(config, "generated", None),
+        help="Generated pkl/npz/npy files, directories, or globs.",
+    )
+    parser.add_argument(
+        "--reference",
+        nargs="*",
+        default=config_default(config, "reference", None),
+        help="Reference motions/features for FID and P/R/F1.",
+    )
     parser.add_argument(
         "--metrics",
-        default="all",
+        default=config_default(config, "metrics", "all"),
         choices=("all", "interactive", "locomotion", "reaching"),
         help="Metric group to run.",
     )
-    parser.add_argument("--output", default=None, help="Optional JSON output path.")
-    parser.add_argument("--fps", type=float, default=20.0)
-    parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--feature-frames", type=int, default=64)
-    parser.add_argument("--feature-dim", type=int, default=512)
-    parser.add_argument("--diversity-pairs", type=int, default=300)
-    parser.add_argument("--multimodality-pairs", type=int, default=100)
-    parser.add_argument("--precision-k", type=int, default=3)
+    parser.add_argument("--output", default=config_default(config, "output", None), help="Optional JSON output path.")
+    parser.add_argument("--fps", type=float, default=config_default(config, "fps", 20.0))
+    parser.add_argument("--seed", type=int, default=config_default(config, "seed", 1234))
+    parser.add_argument("--feature-frames", type=int, default=config_default(config, "feature_frames", 64))
+    parser.add_argument("--feature-dim", type=int, default=config_default(config, "feature_dim", 512))
+    parser.add_argument("--diversity-pairs", type=int, default=config_default(config, "diversity_pairs", 300))
+    parser.add_argument("--multimodality-pairs", type=int, default=config_default(config, "multimodality_pairs", 100))
+    parser.add_argument("--precision-k", type=int, default=config_default(config, "precision_k", 3))
 
-    parser.add_argument("--scene-occ", default=None, help="Scene occupancy .npy/.npz or a directory of scene files.")
-    parser.add_argument("--scene-grid", nargs=9, type=float, default=DEFAULT_SCENE_GRID)
-    parser.add_argument("--body-points", choices=("auto", "joints", "vertices"), default="auto")
-    parser.add_argument("--out-of-bounds-occupied", dest="out_of_bounds_occupied", action="store_true", default=True)
+    parser.add_argument("--scene-occ", default=config_default(config, "scene_occ", None), help="Scene occupancy .npy/.npz or a directory of scene files.")
+    parser.add_argument("--scene-grid", nargs=9, type=float, default=config_default(config, "scene_grid", DEFAULT_SCENE_GRID))
+    parser.add_argument("--body-points", choices=("auto", "joints", "vertices"), default=config_default(config, "body_points", "auto"))
+    parser.add_argument(
+        "--out-of-bounds-occupied",
+        dest="out_of_bounds_occupied",
+        action="store_true",
+        default=config_default(config, "out_of_bounds_occupied", True),
+    )
     parser.add_argument("--free-out-of-bounds", dest="out_of_bounds_occupied", action="store_false")
 
-    parser.add_argument("--foot-joints", default=",".join(map(str, DEFAULT_FOOT_JOINTS)))
-    parser.add_argument("--floor-height", type=float, default=None)
-    parser.add_argument("--contact-height", type=float, default=0.05)
-    parser.add_argument("--contact-velocity", type=float, default=0.10)
+    parser.add_argument("--foot-joints", default=config_default(config, "foot_joints", ",".join(map(str, DEFAULT_FOOT_JOINTS))))
+    parser.add_argument("--floor-height", type=float, default=config_default(config, "floor_height", None))
+    parser.add_argument("--contact-height", type=float, default=config_default(config, "contact_height", 0.05))
+    parser.add_argument("--contact-velocity", type=float, default=config_default(config, "contact_velocity", 0.10))
 
-    parser.add_argument("--goal", nargs=3, type=float, default=None)
-    parser.add_argument("--goal-file", default=None, help="JSON map or CSV with name,x,y,z columns.")
-    parser.add_argument("--hand-joints", default=",".join(map(str, DEFAULT_HAND_JOINTS)))
-    parser.add_argument("--reach-threshold", type=float, default=0.20)
+    parser.add_argument("--goal", nargs=3, type=float, default=config_default(config, "goal", None))
+    parser.add_argument("--goal-file", default=config_default(config, "goal_file", None), help="JSON map or CSV with name,x,y,z columns.")
+    parser.add_argument("--hand-joints", default=config_default(config, "hand_joints", ",".join(map(str, DEFAULT_HAND_JOINTS))))
+    parser.add_argument("--reach-threshold", type=float, default=config_default(config, "reach_threshold", 0.20))
 
-    parser.add_argument("--smpl-dir", default=None, help="Required when evaluating pkl files containing SMPL-X params.")
-    parser.add_argument("--gender", default="male")
-    parser.add_argument("--device", default="cuda" if torch is not None and torch.cuda.is_available() else "cpu")
-    parser.add_argument("--smpl-batch-size", type=int, default=256)
-    parser.add_argument("--compute-vertices", action="store_true")
-    parser.add_argument("--joints-ind", default=None, help="Optional comma-separated SMPL-X joint ids to keep.")
+    parser.add_argument("--smpl-dir", default=config_default(config, "smpl_dir", None), help="Required when evaluating pkl files containing SMPL-X params.")
+    parser.add_argument("--gender", default=config_default(config, "gender", "male"))
+    parser.add_argument("--device", default=config_default(config, "device", "cuda" if torch is not None and torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--smpl-batch-size", type=int, default=config_default(config, "smpl_batch_size", 256))
+    parser.add_argument("--compute-vertices", action="store_true", default=config_default(config, "compute_vertices", False))
+    parser.add_argument("--joints-ind", default=config_default(config, "joints_ind", None), help="Optional comma-separated SMPL-X joint ids to keep.")
     return parser
 
 
 def main() -> None:
-    parser = build_argparser()
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
+    pre_args, _ = pre_parser.parse_known_args()
+    config = load_config(pre_args.config)
+
+    parser = build_argparser(config)
     args = parser.parse_args()
+    if not args.generated:
+        parser.error("Set generated in the config file or pass --generated on the command line.")
     args.foot_joints = parse_ints(args.foot_joints)
     args.hand_joints = parse_ints(args.hand_joints)
     args.joints_ind = parse_ints(args.joints_ind)
