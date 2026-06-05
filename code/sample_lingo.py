@@ -1,6 +1,7 @@
 import os
 import glob
 import pickle as pkl
+import sys
 import numpy as np
 import torch
 from pathlib import Path
@@ -15,6 +16,19 @@ from constants import *
 from clip_utils import get_clip_features
 from datasets.lingo import LingoDataset
 from astar import get_path
+
+
+def load_pickle_compat(path):
+    # NumPy 2 pickles may reference numpy._core, while older NumPy exposes
+    # the same modules under numpy.core. Register aliases before unpickling.
+    sys.modules.setdefault('numpy._core', np.core)
+    sys.modules.setdefault('numpy._core.multiarray', np.core.multiarray)
+    sys.modules.setdefault('numpy._core.numeric', np.core.numeric)
+    if hasattr(np.core, '_multiarray_umath'):
+        sys.modules.setdefault('numpy._core._multiarray_umath', np.core._multiarray_umath)
+    with open(path, 'rb') as f:
+        return pkl.load(f)
+
 
 def sample_step(cfg, step, mat, fixed_points, sampler, cond, trajectory, pi):
     raw_text = cond['raw_text']
@@ -128,8 +142,7 @@ def get_mat(cfg, points):
 def get_guidance(cfg, seg_id):
     cond = {}
 
-    with open(cfg.input_path, 'rb') as f:
-        input = pkl.load(f)
+    input = load_pickle_compat(cfg.input_path)
     input = input[seg_id]
 
     cond['scene_name'] = input['scene_name']
