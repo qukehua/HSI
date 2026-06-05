@@ -70,7 +70,8 @@ hand_joints: [20, 21, 25, 26, 27, 40, 49]
 reach_threshold: 0.20
 
 # SMPL-X conversion settings for sample_lingo.py output pkl files.
-smpl_dir: null
+# Required when generated files contain transl/body_pose/global_orient.
+smpl_dir: ../smpl_models
 gender: male
 device: cuda
 smpl_batch_size: 256
