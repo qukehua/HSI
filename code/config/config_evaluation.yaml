@@ -10,6 +10,25 @@ generated: []
 # Leave empty when you only need diversity, locomotion, or reaching metrics.
 reference: []
 
+# Optional: automatically slice GT clips from the LINGO dataset as reference.
+# This reads human_joints_aligned.npy with mmap and cuts many clips using
+# language_motion_dict start_idx/end_idx, so you do not need to create
+# reference_interactive.npz manually.
+reference_dataset: null
+reference_motion_dict: language_motion_dict/language_motion_dict__inter_and_loco__16.pkl
+reference_joints_file: human_joints_aligned.npy
+reference_max_samples: 5000
+reference_sample_seed: null
+reference_step: 3
+reference_window_size: 16
+
+# Optional GT filters. Keep null to use all clips. Set true/false to select.
+reference_text_contains: null
+reference_need_scene: null
+reference_need_pelvis_dir: null
+reference_need_hand_goal: null
+reference_need_pi: null
+
 # all, interactive, locomotion, or reaching.
 metrics: all
 

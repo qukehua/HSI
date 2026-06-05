@@ -67,6 +67,19 @@ def parse_ints(value) -> Tuple[int, ...]:
     return tuple(int(item) for item in value.split(",") if item.strip())
 
 
+def parse_bool_or_none(value):
+    if value is None or isinstance(value, bool):
+        return value
+    value = str(value).strip().lower()
+    if value in ("none", "null", ""):
+        return None
+    if value in ("1", "true", "yes", "y"):
+        return True
+    if value in ("0", "false", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected true, false, or null, got {value!r}.")
+
+
 def load_config(path: Optional[str]) -> Dict:
     if path is None:
         return {}
@@ -377,6 +390,72 @@ def load_samples(paths: Sequence[str], args: argparse.Namespace) -> List[MotionS
         samples.extend(load_motion_file(path, args))
     if not samples:
         raise RuntimeError(f"No samples loaded from: {paths}")
+    return samples
+
+
+def bool_filter(values: Optional[np.ndarray], expected: Optional[bool], size: int) -> np.ndarray:
+    if expected is None or values is None:
+        return np.ones(size, dtype=bool)
+    return np.asarray(values, dtype=bool) == expected
+
+
+def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
+    folder = Path(args.reference_dataset)
+    if not folder.exists():
+        raise RuntimeError(f"Reference dataset folder does not exist: {folder}")
+
+    joints_path = folder / args.reference_joints_file
+    motion_dict_path = folder / args.reference_motion_dict
+    if not joints_path.exists():
+        raise RuntimeError(f"GT joints file does not exist: {joints_path}")
+    if not motion_dict_path.exists():
+        raise RuntimeError(f"Language motion dict does not exist: {motion_dict_path}")
+
+    joints_all = np.load(joints_path, mmap_mode="r", allow_pickle=True)
+    motion_dict = load_pickle(motion_dict_path)
+    start_idx = np.asarray(motion_dict["start_idx"], dtype=np.int64)
+    end_idx = np.asarray(motion_dict["end_idx"], dtype=np.int64)
+    text = motion_dict.get("text", [None] * len(start_idx))
+    size = len(start_idx)
+
+    expected_span = int(args.reference_window_size) * int(args.reference_step)
+    mask = (end_idx - start_idx) == expected_span
+    mask &= bool_filter(motion_dict.get("need_scene"), args.reference_need_scene, size)
+    mask &= bool_filter(motion_dict.get("need_pelvis_dir"), args.reference_need_pelvis_dir, size)
+    mask &= bool_filter(motion_dict.get("need_hand_goal"), args.reference_need_hand_goal, size)
+    mask &= bool_filter(motion_dict.get("need_pi"), args.reference_need_pi, size)
+
+    if args.reference_text_contains:
+        query = str(args.reference_text_contains).lower()
+        text_mask = np.asarray([query in (normalize_label(item) or "").lower() for item in text], dtype=bool)
+        mask &= text_mask
+
+    indices = np.flatnonzero(mask)
+    if indices.size == 0:
+        raise RuntimeError("No GT reference clips matched the reference_dataset filters.")
+
+    max_samples = int(args.reference_max_samples)
+    if max_samples > 0 and indices.size > max_samples:
+        rng = np.random.default_rng(args.reference_sample_seed if args.reference_sample_seed is not None else args.seed)
+        indices = rng.choice(indices, size=max_samples, replace=False)
+
+    samples = []
+    for idx in indices:
+        start = int(start_idx[idx])
+        stop = start + expected_span
+        clip = np.asarray(joints_all[start:stop:int(args.reference_step)], dtype=np.float32)
+        if clip.shape[0] != int(args.reference_window_size):
+            continue
+        samples.append(
+            MotionSample(
+                name=f"gt_{idx}",
+                source=str(folder),
+                joints=clip,
+                label=normalize_label(text[idx]),
+            )
+        )
+    if not samples:
+        raise RuntimeError("GT reference clips were found, but none could be loaded.")
     return samples
 
 
@@ -774,6 +853,29 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         help="Reference motions/features for FID and P/R/F1.",
     )
     parser.add_argument(
+        "--reference-dataset",
+        default=config_default(config, "reference_dataset", None),
+        help="LINGO dataset folder used to auto-slice GT reference clips.",
+    )
+    parser.add_argument(
+        "--reference-motion-dict",
+        default=config_default(
+            config,
+            "reference_motion_dict",
+            "language_motion_dict/language_motion_dict__inter_and_loco__16.pkl",
+        ),
+    )
+    parser.add_argument("--reference-joints-file", default=config_default(config, "reference_joints_file", "human_joints_aligned.npy"))
+    parser.add_argument("--reference-max-samples", type=int, default=config_default(config, "reference_max_samples", 5000))
+    parser.add_argument("--reference-sample-seed", type=int, default=config_default(config, "reference_sample_seed", None))
+    parser.add_argument("--reference-step", type=int, default=config_default(config, "reference_step", 3))
+    parser.add_argument("--reference-window-size", type=int, default=config_default(config, "reference_window_size", 16))
+    parser.add_argument("--reference-text-contains", default=config_default(config, "reference_text_contains", None))
+    parser.add_argument("--reference-need-scene", type=parse_bool_or_none, default=config_default(config, "reference_need_scene", None))
+    parser.add_argument("--reference-need-pelvis-dir", type=parse_bool_or_none, default=config_default(config, "reference_need_pelvis_dir", None))
+    parser.add_argument("--reference-need-hand-goal", type=parse_bool_or_none, default=config_default(config, "reference_need_hand_goal", None))
+    parser.add_argument("--reference-need-pi", type=parse_bool_or_none, default=config_default(config, "reference_need_pi", None))
+    parser.add_argument(
         "--metrics",
         default=config_default(config, "metrics", "all"),
         choices=("all", "interactive", "locomotion", "reaching"),
@@ -833,7 +935,12 @@ def main() -> None:
     args.joints_ind = parse_ints(args.joints_ind)
 
     generated = load_samples(args.generated, args)
-    reference = load_samples(args.reference, args) if args.reference else None
+    reference = []
+    if args.reference:
+        reference.extend(load_samples(args.reference, args))
+    if args.reference_dataset:
+        reference.extend(load_reference_dataset(args))
+    reference = reference or None
 
     results = {}
     if args.metrics in ("all", "interactive"):
