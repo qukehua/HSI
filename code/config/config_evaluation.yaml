@@ -18,7 +18,7 @@ output: null
 
 # General motion/evaluation settings.
 fps: 20.0
-seed: 1234
+seed: 42
 
 # Interactive metrics.
 # If inputs already contain features/embeddings, those are used directly.

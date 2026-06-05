@@ -25,6 +25,7 @@ temp/
 # Datasets and large binary assets
 dataset/
 datasets/
+smpl_models/
 *.pdf
 *.zip
 *.tar
