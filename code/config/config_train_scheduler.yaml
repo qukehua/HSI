@@ -3,16 +3,16 @@ defaults:
   - model: scheduler
   - _self_
 
-exp_name: scheduler
+exp_name: scheduler5.28
 train: true
 load_state_dict: true
 batch_size: 1024
 lr: 0.0001
-epochs: 1000
+epochs: 300
 device: cuda:0
 ckpt_name: None
 use_tensorboard: true
-ckpt_interval: 1
+ckpt_interval: 50
 
 exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models

@@ -17,7 +17,7 @@ epochs: 300
 device: cuda:0
 ckpt_name: None
 use_tensorboard: true
-ckpt_interval: 20
+ckpt_interval: 50
 
 exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models

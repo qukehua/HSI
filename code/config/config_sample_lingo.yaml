@@ -16,7 +16,7 @@ batch_size: 1
 interp_s: 3
 
 use_scheduler: true
-scheduler_model_path: ${oc.env:ROOT_DIR}/ckpts/scheduler/scheduler.pth
+scheduler_model_path: /data3/user/qkh/HSI/ckpts/scheduler/scheduler.pth
 scheduler_threshold: 0.7
 locomotion_threshold: 1.0
 
@@ -31,8 +31,8 @@ speed: 0.8
 
 test_setting: demo-21
 exp_dir: ${oc.env:ROOT_DIR}/results/outputs
-ckpt_path: ${oc.env:ROOT_DIR}/ckpts/model/bs128__ws16__scene_occ_two.pth
-input_path: ${oc.env:ROOT_DIR}/results/inputs/${test_setting}.pkl
+ckpt_path: ${oc.env:ROOT_DIR}/results/train5.28/checkpoints/train5.28_epoch280.pth
+input_path: ${oc.env:ROOT_DIR}/results/inputs/demo-21.pkl
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 
 scene_type: occ_two

@@ -3,6 +3,7 @@ from pathfinding.core.grid import Grid
 from pathfinding.finder.a_star import AStarFinder
 import numpy as np
 import cv2
+import os
 
 def get_path(start, end, synhsi_dataset):
     voxel_size = np.divide(synhsi_dataset.scene_grid_np[3: 6] - synhsi_dataset.scene_grid_np[:3],
@@ -21,7 +22,9 @@ def get_path(start, end, synhsi_dataset):
     occ_grid[occ_grid > 1] = 255
 
     img = (occ_grid - occ_grid.min()) / (occ_grid.max() - occ_grid.min()) * 255
-    cv2.imwrite('gray0.jpg', img.T)
+    save_debug = os.environ.get("SAVE_ASTAR_DEBUG", "0") == "1"
+    if save_debug:
+        cv2.imwrite('gray0.jpg', img.T)
 
     occ_grid_astar = Grid(matrix=occ_grid.T)
 
@@ -41,6 +44,7 @@ def get_path(start, end, synhsi_dataset):
     for i in range(len(path)):
         img_new[int(path[i, 0]), int(path[i, 1]), 1] = 255
 
-    cv2.imwrite(f'gray1.jpg', img_new.transpose(1, 0, 2))
+    if save_debug:
+        cv2.imwrite('gray1.jpg', img_new.transpose(1, 0, 2))
 
     return midpoints
