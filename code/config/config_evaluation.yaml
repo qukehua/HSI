@@ -4,7 +4,7 @@
 
 # Files, directories, or globs produced by sample_lingo.py or your own sampler.
 # Required. Fill this before running without --generated.
-generated: []
+generated: [../results/outputs/output__demo-21__0.pkl]
 
 # GT/reference motions or features for FID, Precision, Recall, and F1.
 # Leave empty when you only need diversity, locomotion, or reaching metrics.
