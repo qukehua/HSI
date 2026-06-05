@@ -55,6 +55,7 @@ class MotionSample:
     vertices: Optional[np.ndarray] = None
     features: Optional[np.ndarray] = None
     label: Optional[str] = None
+    condition_id: Optional[str] = None
     scene_name: Optional[str] = None
     goal: Optional[np.ndarray] = None
 
@@ -136,8 +137,14 @@ def parse_yaml_scalar(value: str):
     if value.lower() == "false":
         return False
     if value.startswith("[") and value.endswith("]"):
-        value = value.replace("null", "None").replace("true", "True").replace("false", "False")
-        return ast.literal_eval(value)
+        literal_value = value.replace("null", "None").replace("true", "True").replace("false", "False")
+        try:
+            return ast.literal_eval(literal_value)
+        except (SyntaxError, ValueError):
+            inner = value[1:-1].strip()
+            if not inner:
+                return []
+            return [parse_yaml_scalar(item.strip()) for item in inner.split(",")]
     try:
         if any(char in value for char in (".", "e", "E")):
             return float(value)
@@ -171,6 +178,20 @@ def normalize_label(value) -> Optional[str]:
             counts[item] = counts.get(item, 0) + 1
         return max(counts, key=counts.get)
     return str(value)
+
+
+def normalize_condition_id(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    text = str(value)
+    suffix = Path(text).suffix
+    if suffix in (".pkl", ".npz", ".npy"):
+        return Path(text).stem
+    return text
 
 
 def ensure_motion_array(arr: np.ndarray) -> List[np.ndarray]:
@@ -272,6 +293,7 @@ def smplx_to_motion(
 
 def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> List[MotionSample]:
     label = normalize_label(find_first_key(data, ("label", "text", "raw_text", "action", "instruction")))
+    condition_id = normalize_condition_id(find_first_key(data, ("mm_group_id", "condition_id", "test_setting", "input_pkl_path")))
     scene_name = normalize_label(find_first_key(data, ("scene_name", "scene", "scene_id")))
     goal = find_first_key(data, ("goal", "hand_goal", "hand_location", "target", "target_location", "object_goal"))
     goal = as_float_array(goal)
@@ -299,6 +321,7 @@ def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> 
                 source=str(path),
                 features=features[idx],
                 label=label,
+                condition_id=condition_id,
                 scene_name=scene_name,
                 goal=goal,
             )
@@ -321,6 +344,7 @@ def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> 
                 vertices=vertices,
                 features=feature,
                 label=label,
+                condition_id=condition_id,
                 scene_name=scene_name,
                 goal=goal,
             )
@@ -452,6 +476,7 @@ def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
                 source=str(folder),
                 joints=clip,
                 label=normalize_label(text[idx]),
+                condition_id=f"gt_{idx}",
             )
         )
     if not samples:
@@ -550,27 +575,30 @@ def pairwise_distances(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.sqrt(dist2)
 
 
-def average_pairwise(features: np.ndarray, pairs: int, rng: np.random.Generator) -> float:
+def diversity_score(features: np.ndarray, subset_size: int, rng: np.random.Generator) -> float:
     if len(features) < 2:
         return float("nan")
-    idx_a = rng.integers(0, len(features), size=pairs)
-    idx_b = rng.integers(0, len(features), size=pairs)
-    same = idx_a == idx_b
-    while np.any(same):
-        idx_b[same] = rng.integers(0, len(features), size=int(same.sum()))
-        same = idx_a == idx_b
+
+    if len(features) >= subset_size:
+        idx_a = rng.choice(len(features), size=subset_size, replace=False)
+        idx_b = rng.choice(len(features), size=subset_size, replace=False)
+    else:
+        idx_a = rng.choice(len(features), size=subset_size, replace=True)
+        idx_b = rng.choice(len(features), size=subset_size, replace=True)
+
     return float(np.linalg.norm(features[idx_a] - features[idx_b], axis=1).mean())
 
 
 def multimodality(samples: Sequence[MotionSample], features: np.ndarray, pairs: int, rng: np.random.Generator) -> float:
     label_to_idx: Dict[str, List[int]] = {}
     for idx, sample in enumerate(samples):
-        if sample.label is not None:
-            label_to_idx.setdefault(sample.label, []).append(idx)
+        key = sample.condition_id or sample.label
+        if key is not None:
+            label_to_idx.setdefault(key, []).append(idx)
     values = []
     for indices in label_to_idx.values():
         if len(indices) >= 2:
-            values.append(average_pairwise(features[indices], pairs, rng))
+            values.append(diversity_score(features[indices], pairs, rng))
     return float(np.nanmean(values)) if values else float("nan")
 
 
@@ -608,7 +636,7 @@ def interactive_metrics(
         gen_features = project_features(gen_features, args.feature_dim, rng)
 
     metrics = {
-        "diversity": average_pairwise(gen_features, args.diversity_pairs, rng),
+        "diversity": diversity_score(gen_features, args.diversity_pairs, rng),
         "multi_modality": multimodality(generated, gen_features, args.multimodality_pairs, rng),
     }
     if reference:
@@ -886,7 +914,7 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=config_default(config, "seed", 1234))
     parser.add_argument("--feature-frames", type=int, default=config_default(config, "feature_frames", 64))
     parser.add_argument("--feature-dim", type=int, default=config_default(config, "feature_dim", 512))
-    parser.add_argument("--diversity-pairs", type=int, default=config_default(config, "diversity_pairs", 300))
+    parser.add_argument("--diversity-pairs", type=int, default=config_default(config, "diversity_pairs", 200))
     parser.add_argument("--multimodality-pairs", type=int, default=config_default(config, "multimodality_pairs", 100))
     parser.add_argument("--precision-k", type=int, default=config_default(config, "precision_k", 3))
 

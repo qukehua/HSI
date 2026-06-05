@@ -1,7 +1,9 @@
 import os
+import glob
 import pickle as pkl
 import numpy as np
 import torch
+from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 from scipy.spatial.transform import Rotation as R
 from tqdm.auto import tqdm
@@ -167,24 +169,11 @@ def get_guidance(cfg, seg_id):
     return cond
 
 
-@hydra.main(version_base=None, config_path="config", config_name="config_sample_lingo")
-def sample(cfg: DictConfig) -> None:
-    device = cfg.device
+def load_sample_models(cfg, device):
     model_joints_to_smplx = init_model(cfg.model.model_smplx, device=device, eval=True)
     print('model_joints_to_smplx device: ', next(model_joints_to_smplx.parameters()).device)
     model_body = init_model(cfg.model.synhsi_body, device=device, eval=True)
 
-    cond = get_guidance(cfg, 0)
-    seg_num = cond['seg_num']
-    cfg.dataset.test_scene_name = cond['scene_name']
-    print(OmegaConf.to_yaml(cfg))
-
-    synhsi_dataset = LingoDataset(**cfg.dataset)
-
-    sampler_body = hydra.utils.instantiate(cfg.sampler.pelvis)
-    sampler_body.set_dataset_and_model(synhsi_dataset, model_body)
-
-    # load scheduler model
     if cfg.use_scheduler:
         scheduler_model = TimingModel(**cfg.model.scheduler)
         scheduler_model.load_state_dict(torch.load(cfg.scheduler_model_path, map_location=device))
@@ -193,6 +182,25 @@ def sample(cfg: DictConfig) -> None:
     else:
         scheduler_model = None
 
+    return model_joints_to_smplx, model_body, scheduler_model
+
+
+def get_sampler_for_scene(cfg, model_body, scene_name, sampler_cache):
+    if scene_name in sampler_cache:
+        return sampler_cache[scene_name]
+
+    cfg.dataset.test_scene_name = scene_name
+    synhsi_dataset = LingoDataset(**cfg.dataset)
+    sampler_body = hydra.utils.instantiate(cfg.sampler.pelvis)
+    sampler_body.set_dataset_and_model(synhsi_dataset, model_body)
+    sampler_cache[scene_name] = sampler_body
+    return sampler_body
+
+
+def run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model, exp_dir=None, save_filename=None):
+    device = cfg.device
+    cond = get_guidance(cfg, 0)
+    seg_num = cond['seg_num']
     points_all = []
     pi_list = []
     raw_text_list = []
@@ -289,21 +297,81 @@ def sample(cfg: DictConfig) -> None:
     points_all = np.concatenate(points_all, axis=1).reshape(cfg.batch_size, -1, cfg.dataset.nb_joints, 3)
 
     # save generated results
-    exp_dir = cfg.exp_dir
+    if exp_dir is None:
+        exp_dir = cfg.exp_dir
     os.makedirs(exp_dir, exist_ok=True)
     for i in range(cfg.batch_size):
         keypoint_gene_torch = torch.from_numpy(points_all[i]).reshape(-1, cfg.dataset.nb_joints * 3).to(device)
         pose, transl, _, _ = joints_to_smpl(model_joints_to_smplx, keypoint_gene_torch, cfg.dataset.joints_ind, cfg.interp_s)
         output_data = {'transl': transl, 'body_pose': pose[:, 3:], 'global_orient': pose[:, :3],
                         'scene_name': cond['scene_name'], 'input_pkl_path': cfg.input_path,
+                        'test_setting': cfg.test_setting, 'repeat_time': cfg.repeat_time,
+                        'mm_group_id': cfg.test_setting,
                         'raw_text': raw_text_list,
                         }
-        save_filename = f"output__{cfg.test_setting}__{cfg.repeat_time}.pkl"
+        if save_filename is None:
+            save_filename = f"output__{cfg.test_setting}__{cfg.repeat_time}.pkl"
         with open(os.path.join(exp_dir, save_filename), 'wb') as f:
             pkl.dump(output_data, f)
         print(f"Saved to {os.path.join(exp_dir, save_filename)}")
 
     print(cfg.test_setting, cfg.repeat_time)
+
+
+def run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model):
+    input_pattern = os.path.join(cfg.mm_input_dir, cfg.mm_input_glob)
+    input_paths = sorted(glob.glob(input_pattern))
+    if cfg.mm_max_inputs > 0:
+        input_paths = input_paths[:cfg.mm_max_inputs]
+    if len(input_paths) == 0:
+        raise RuntimeError(f"No input files matched {input_pattern}")
+
+    sampler_cache = {}
+    output_root = Path(cfg.mm_output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    for input_path in tqdm(input_paths, desc='mm eval inputs'):
+        cfg.input_path = input_path
+        cfg.test_setting = Path(input_path).stem
+
+        cond = get_guidance(cfg, 0)
+        scene_name = cond['scene_name']
+        sampler_body = get_sampler_for_scene(cfg, model_body, scene_name, sampler_cache)
+
+        case_dir = output_root / f"{cfg.test_setting}__{scene_name}"
+        case_dir.mkdir(parents=True, exist_ok=True)
+
+        for repeat_id in tqdm(range(cfg.mm_num_repeats), desc=f'{cfg.test_setting}', leave=False):
+            cfg.repeat_time = repeat_id
+            save_filename = f"output__{cfg.test_setting}__{repeat_id:03d}.pkl"
+            save_path = case_dir / save_filename
+            if cfg.mm_skip_existing and save_path.exists():
+                print(f"Skip existing {save_path}")
+                continue
+            run_sample_once(
+                cfg,
+                sampler_body,
+                model_joints_to_smplx,
+                scheduler_model,
+                exp_dir=str(case_dir),
+                save_filename=save_filename,
+            )
+
+
+@hydra.main(version_base=None, config_path="config", config_name="config_sample_lingo")
+def sample(cfg: DictConfig) -> None:
+    device = cfg.device
+    model_joints_to_smplx, model_body, scheduler_model = load_sample_models(cfg, device)
+    print(OmegaConf.to_yaml(cfg))
+
+    if cfg.mm_sampling:
+        run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model)
+        return
+
+    cond = get_guidance(cfg, 0)
+    sampler_cache = {}
+    sampler_body = get_sampler_for_scene(cfg, model_body, cond['scene_name'], sampler_cache)
+    run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model)
 
 
 if __name__ == '__main__':

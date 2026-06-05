@@ -45,7 +45,7 @@ seed: 42
 # to feature_dim before computing FID/diversity/P-R-F1.
 feature_frames: 64
 feature_dim: 512
-diversity_pairs: 300
+diversity_pairs: 200
 multimodality_pairs: 100
 precision_k: 3
 
