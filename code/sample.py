@@ -213,7 +213,11 @@ def get_sampler_for_scene(cfg, model_body, scene_name, sampler_cache):
 def run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model, exp_dir=None, save_filename=None):
     device = cfg.device
     cond = get_guidance(cfg, 0)
-    seg_num = cond['seg_num']
+    input_data = load_pickle_compat(cfg.input_path)
+    if isinstance(input_data, list):
+        seg_num = len(input_data)
+    else:
+        seg_num = cond['seg_num']
     points_all = []
     pi_list = []
     raw_text_list = []
@@ -334,6 +338,11 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model, e
 def run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model):
     input_pattern = os.path.join(cfg.mm_input_dir, cfg.mm_input_glob)
     input_paths = sorted(glob.glob(input_pattern))
+    if len(input_paths) == 0:
+        # Fallback to recursive search so inputs under nested scene folders
+        # (e.g. results/inputs/sceneXX/*.pkl) are picked up automatically.
+        input_pattern_recursive = os.path.join(cfg.mm_input_dir, "**", cfg.mm_input_glob)
+        input_paths = sorted(glob.glob(input_pattern_recursive, recursive=True))
     if cfg.mm_max_inputs > 0:
         input_paths = input_paths[:cfg.mm_max_inputs]
     if len(input_paths) == 0:
@@ -371,7 +380,7 @@ def run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model):
             )
 
 
-@hydra.main(version_base=None, config_path="config", config_name="config_sample_lingo")
+@hydra.main(version_base=None, config_path="config", config_name="config_sample")
 def sample(cfg: DictConfig) -> None:
     device = cfg.device
     model_joints_to_smplx, model_body, scheduler_model = load_sample_models(cfg, device)

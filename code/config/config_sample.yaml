@@ -39,9 +39,9 @@ smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 # When enabled, sample_lingo.py reads all pkl files from mm_input_dir and
 # generates mm_num_repeats stochastic samples for each input.
 mm_sampling: True
-mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs_eval
+mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs
 mm_input_glob: "*.pkl"
-mm_output_dir: ${exp_dir}/outputs_eval
+mm_output_dir: ${exp_dir}/outputs
 mm_num_repeats: 30
 mm_max_inputs: 0
 mm_skip_existing: true
