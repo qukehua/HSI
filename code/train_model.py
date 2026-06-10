@@ -1,6 +1,7 @@
 import torch
+import numpy as np
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from torch.optim import Adam
 from utils import *
@@ -21,7 +22,47 @@ import sys
 sys.path.append(os.path.join(os.environ['ROOT_DIR'], 'code'))
 
 
-@hydra.main(version_base=None, config_path="config", config_name="config_train_lingo")
+def get_split_subset(dataset, dataset_cfg, split_name):
+    if split_name in [None, 'None', 'none', 'null']:
+        return dataset
+    split_dir = dataset_cfg.get('split_dir', 'splits')
+    split_path = os.path.join(dataset_cfg.folder, split_dir, f'{split_name}_idx.npy')
+    split_idx = np.load(split_path).astype(np.int64)
+    return Subset(dataset, split_idx)
+
+
+def move_lingo_batch(batch, device):
+    joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = batch
+    return joints.to(device), \
+           mat.to(device), scene_flag.to(device), \
+           text_clip_embedding.to(device), \
+           pelvis_goal.to(device), hand_goal.to(device), \
+           is_pick.to(device), need_scene.to(device), need_pelvis_dir.to(device), pi.to(device), \
+           need_pi.to(device), is_loco.to(device)
+
+
+@torch.no_grad()
+def validate(model, trainer, dataloader, cfg, device):
+    model.eval()
+    total_loss = torch.zeros(1, device=device)
+    total_count = torch.zeros(1, device=device)
+
+    for batch in dataloader:
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = move_lingo_batch(batch, device)
+        batch_size = joints.shape[0]
+        t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
+        mask, _, _ = get_mask(joints, -1, p=1., fixed_frame=cfg.auto_regre_num)
+        loss = trainer.p_losses(joints, mat, scene_flag, mask, t, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
+        total_loss += loss.detach() * batch_size
+        total_count += batch_size
+
+    torch.distributed.all_reduce(total_loss, op=torch.distributed.ReduceOp.SUM)
+    torch.distributed.all_reduce(total_count, op=torch.distributed.ReduceOp.SUM)
+    model.train()
+    return (total_loss / total_count.clamp_min(1)).item()
+
+
+@hydra.main(version_base=None, config_path="config", config_name="config_train_model")
 def train(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     os.environ["MASTER_ADDR"] = "localhost"
@@ -45,11 +86,23 @@ def train_ddp(rank, world_size, cfg):
 
     model = init_model(list(cfg.model.values())[0], device=rank, eval=False, load_state_dict=cfg.load_state_dict)
 
-    synhsi_dataset = LingoDataset(**cfg.dataset)
+    train_split = cfg.dataset.get('split', 'train')
+    val_split = cfg.get('val_split', 'val')
+    dataset_cfg = OmegaConf.create(OmegaConf.to_container(cfg.dataset, resolve=True))
+    dataset_cfg.split = None
+    synhsi_dataset = LingoDataset(**dataset_cfg)
+    train_dataset = get_split_subset(synhsi_dataset, dataset_cfg, train_split)
+    val_dataset = get_split_subset(synhsi_dataset, dataset_cfg, val_split) if cfg.get('use_validation', True) else None
 
-    sampler = DistributedSampler(synhsi_dataset)
-    dataloader = DataLoader(synhsi_dataset, batch_size=cfg.batch_size, drop_last=True, num_workers=cfg.num_workers,
+    sampler = DistributedSampler(train_dataset)
+    dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, drop_last=True, num_workers=cfg.num_workers,
                             sampler=sampler, pin_memory=True)
+    if val_dataset is not None:
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+        val_dataloader = DataLoader(val_dataset, batch_size=cfg.val_batch_size, drop_last=True, num_workers=cfg.num_workers,
+                                    sampler=val_sampler, pin_memory=True)
+    else:
+        val_dataloader = None
 
     trainer = hydra.utils.instantiate(list(cfg.sampler.values())[0])
     trainer.set_dataset_and_model(synhsi_dataset, model)
@@ -59,6 +112,8 @@ def train_ddp(rank, world_size, cfg):
     if cfg.use_tensorboard and rank == 0:
         writer = SummaryWriter(log_dir=os.path.join(cfg.exp_dir, 'tensorboard_logs'))
 
+    best_val_loss = float('inf')
+
     for epoch in range(cfg.epochs):
         print(f'Start epoch {epoch}', flush=True)
         sampler.set_epoch(epoch)
@@ -67,13 +122,7 @@ def train_ddp(rank, world_size, cfg):
             step += 1
             optimizer.zero_grad()
 
-            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = batch
-            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = joints.to(device), \
-                                                                                                        mat.to(device), scene_flag.to(device), \
-                                                                                                        text_clip_embedding.to(device), \
-                                                                                                        pelvis_goal.to(device), hand_goal.to(device), \
-                                                                                                        is_pick.to(device), need_scene.to(device), need_pelvis_dir.to(device), pi.to(device), \
-                                                                                                        need_pi.to(device), is_loco.to(device)
+            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = move_lingo_batch(batch, device)
 
             t = torch.randint(0, trainer.timesteps, (cfg.batch_size,), device=device).long()
             with torch.no_grad():
@@ -94,6 +143,20 @@ def train_ddp(rank, world_size, cfg):
             ckpt_folder = os.path.join(cfg.exp_dir, 'checkpoints')
             os.makedirs(ckpt_folder, exist_ok=True)
             torch.save(model.module.state_dict(), os.path.join(ckpt_folder, f"{cfg.exp_name}_epoch{epoch:03d}.pth"))
+
+        if val_dataloader is not None and epoch % cfg.val_interval == 0:
+            val_loss = validate(model, trainer, val_dataloader, cfg, device)
+            if rank == 0:
+                print(f"Epoch: {epoch}   Val Loss: {val_loss}", flush=True)
+                if cfg.use_tensorboard:
+                    writer.add_scalar('Val/Loss', val_loss, epoch)
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    ckpt_folder = os.path.join(cfg.exp_dir, 'checkpoints')
+                    os.makedirs(ckpt_folder, exist_ok=True)
+                    best_path = os.path.join(ckpt_folder, 'best_model.pth')
+                    torch.save(model.module.state_dict(), best_path)
+                    print(f"Saved best model to {best_path} with val loss {best_val_loss}", flush=True)
 
         torch.distributed.barrier()
 
