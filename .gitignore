@@ -24,7 +24,9 @@ tmp/
 temp/
 
 # Datasets and large binary assets
+dataset
 dataset/
+datasets
 datasets/
 smpl_models/
 *.pdf

@@ -71,10 +71,15 @@ Navigate to the `code` directory:
 cd code
 ```
 
+Creat train, validation, and test dataset:
+
+```bash
+python create_dataset_splits.py
+```
 To start training the model, run the training script from the command line:
 
 ```bash
-python train_lingo.py
+python train_model.py
 ```
 
 The training script will automatically load the dataset, set up the model, and commence training sessions using the configurations in `./code/config` folder.
