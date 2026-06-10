@@ -12,6 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 import datetime
 from datasets.scheduler import SchedulerDataset
 from models.synhsi import TimingModel
+from tqdm.auto import tqdm
 
 os.environ['ROOT_DIR'] = '..'
 os.environ['HYDRA_FULL_ERROR'] = '1'
@@ -34,13 +35,14 @@ def get_split_subset(dataset, dataset_cfg, split_name):
 
 
 @torch.no_grad()
-def validate_scheduler(model, dataloader, loss_fn, device):
+def validate_scheduler(model, dataloader, loss_fn, device, epoch=0, show_progress=True):
     model.eval()
     total_loss = 0.0
     total_count = 0
     correct = 0
 
-    for batch in dataloader:
+    progress = tqdm(dataloader, desc=f"Val {epoch}", disable=not show_progress, leave=False)
+    for batch in progress:
         joints, stop, pi, text_clip_embedding = batch
         joints = joints.to(device)
         stop = stop.to(device=device, dtype=torch.float32)
@@ -53,6 +55,7 @@ def validate_scheduler(model, dataloader, loss_fn, device):
         total_loss += loss.item() * batch_size
         total_count += batch_size
         correct += ((stop_pred > 0.5) == (stop > 0.5)).sum().item()
+        progress.set_postfix(loss=f"{loss.item():.4f}")
 
     model.train()
     mean_loss = total_loss / max(total_count, 1)
@@ -107,7 +110,8 @@ def train(cfg):
             os.makedirs(ckpt_folder, exist_ok=True)
             torch.save(model.state_dict(), os.path.join(ckpt_folder, f"{cfg.exp_name}_epoch{epoch:03d}.pth"))
 
-        for batch in dataloader:
+        progress = tqdm(dataloader, desc=f"Train {epoch}", leave=True)
+        for batch in progress:
             step += 1
 
             optimizer.zero_grad()
@@ -133,9 +137,10 @@ def train(cfg):
 
             loss.backward()
             optimizer.step()
+            progress.set_postfix(loss=f"{loss.item():.4f}")
 
         if val_dataloader is not None and epoch % cfg.val_interval == 0:
-            val_loss, val_acc = validate_scheduler(model, val_dataloader, loss_fn, device)
+            val_loss, val_acc = validate_scheduler(model, val_dataloader, loss_fn, device, epoch=epoch, show_progress=True)
             print(f"Epoch: {epoch}   Val Loss: {val_loss}   Val Acc: {val_acc}", flush=True)
             if cfg.use_tensorboard and rank == 0:
                 writer.add_scalar('Val/Loss', val_loss, epoch)

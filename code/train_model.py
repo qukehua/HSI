@@ -10,6 +10,7 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 import datetime
 from datasets.lingo import LingoDataset
+from tqdm.auto import tqdm
 
 os.environ['ROOT_DIR'] = '..'
 os.environ['HYDRA_FULL_ERROR'] = '1'
@@ -42,12 +43,13 @@ def move_lingo_batch(batch, device):
 
 
 @torch.no_grad()
-def validate(model, trainer, dataloader, cfg, device):
+def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=False):
     model.eval()
     total_loss = torch.zeros(1, device=device)
     total_count = torch.zeros(1, device=device)
 
-    for batch in dataloader:
+    progress = tqdm(dataloader, desc=f"Val {epoch}", disable=not show_progress, leave=False)
+    for batch in progress:
         joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = move_lingo_batch(batch, device)
         batch_size = joints.shape[0]
         t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
@@ -55,6 +57,7 @@ def validate(model, trainer, dataloader, cfg, device):
         loss = trainer.p_losses(joints, mat, scene_flag, mask, t, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
         total_loss += loss.detach() * batch_size
         total_count += batch_size
+        progress.set_postfix(loss=f"{loss.item():.4f}")
 
     torch.distributed.all_reduce(total_loss, op=torch.distributed.ReduceOp.SUM)
     torch.distributed.all_reduce(total_count, op=torch.distributed.ReduceOp.SUM)
@@ -115,10 +118,12 @@ def train_ddp(rank, world_size, cfg):
     best_val_loss = float('inf')
 
     for epoch in range(cfg.epochs):
-        print(f'Start epoch {epoch}', flush=True)
+        if rank == 0:
+            print(f'Start epoch {epoch}', flush=True)
         sampler.set_epoch(epoch)
         step = 0
-        for batch in dataloader:
+        progress = tqdm(dataloader, desc=f"Train {epoch}", disable=rank != 0, leave=True)
+        for batch in progress:
             step += 1
             optimizer.zero_grad()
 
@@ -137,6 +142,7 @@ def train_ddp(rank, world_size, cfg):
 
             loss.backward()
             optimizer.step()
+            progress.set_postfix(loss=f"{loss.item():.4f}")
 
         if rank == 0 and epoch % cfg.ckpt_interval == 0:
             print(f'Saving checkpoint', flush=True)
@@ -145,7 +151,7 @@ def train_ddp(rank, world_size, cfg):
             torch.save(model.module.state_dict(), os.path.join(ckpt_folder, f"{cfg.exp_name}_epoch{epoch:03d}.pth"))
 
         if val_dataloader is not None and epoch % cfg.val_interval == 0:
-            val_loss = validate(model, trainer, val_dataloader, cfg, device)
+            val_loss = validate(model, trainer, val_dataloader, cfg, device, epoch=epoch, show_progress=(rank == 0))
             if rank == 0:
                 print(f"Epoch: {epoch}   Val Loss: {val_loss}", flush=True)
                 if cfg.use_tensorboard:
