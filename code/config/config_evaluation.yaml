@@ -17,6 +17,8 @@ reference: []
 reference_dataset: null
 reference_motion_dict: language_motion_dict/language_motion_dict__inter_and_loco__16.pkl
 reference_joints_file: human_joints_aligned.npy
+reference_split: null
+reference_split_dir: splits
 reference_max_samples: 5000
 reference_sample_seed: null
 reference_step: 3

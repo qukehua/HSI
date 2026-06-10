@@ -11,6 +11,8 @@ class LingoDataset(Dataset):
                  load_scene=True, load_language=True, load_pelvis_goal=False, load_hand_goal=False,
                  max_window_size=16,
                  use_pi=True,
+                 split=None,
+                 split_dir='splits',
                  vis=True,
                  start_type='stand',
                  test_scene_name=None,
@@ -24,6 +26,8 @@ class LingoDataset(Dataset):
         self.load_pelvis_goal = load_pelvis_goal
         self.load_hand_goal = load_hand_goal
         self.use_pi = use_pi
+        self.split = split
+        self.split_dir = split_dir
         self.vis = vis
         self.start_type = start_type
         self.test_scene_name = test_scene_name
@@ -54,6 +58,20 @@ class LingoDataset(Dataset):
 
             self.start_ind = language_motion_dict['start_idx']
             self.end_ind = language_motion_dict['end_idx']
+
+            if self.split not in [None, 'None', 'none', 'null']:
+                split_path = os.path.join(self.folder, self.split_dir, f'{self.split}_idx.npy')
+                split_idx = np.load(split_path)
+                self.start_ind = self.start_ind[split_idx]
+                self.end_ind = self.end_ind[split_idx]
+                self.text = [self.text[idx] for idx in split_idx]
+                self.end_range = self.end_range[split_idx]
+                self.need_scene = self.need_scene[split_idx]
+                self.need_pelvis_dir = self.need_pelvis_dir[split_idx]
+                self.pi = self.pi[split_idx]
+                self.need_pi = self.need_pi[split_idx]
+                self.left_hand_inter_frame = self.left_hand_inter_frame[split_idx]
+                self.right_hand_inter_frame = self.right_hand_inter_frame[split_idx]
 
             if self.vis:  # for sampling first two frames
                 if self.start_type == 'stand':

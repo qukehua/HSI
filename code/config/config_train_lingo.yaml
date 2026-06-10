@@ -18,6 +18,10 @@ device: cuda:0
 ckpt_name: None
 use_tensorboard: true
 ckpt_interval: 50
+use_validation: true
+val_split: val
+val_interval: 1
+val_batch_size: ${batch_size}
 
 exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
@@ -36,6 +40,9 @@ use_pi: true
 load_hand_goal: true
 load_pelvis_goal: true
 auto_regre_num: 2
+
+dataset:
+  split: train
 
 ckpt_path: None
 

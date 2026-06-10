@@ -1,7 +1,8 @@
 __pycache__/
 .idea/
 *.pyc
-.blend1
+*.blend
+*.blend1
 
 # Python environments and tooling caches
 .venv/
@@ -31,6 +32,7 @@ smpl_models/
 *.tar
 *.tar.gz
 *.7z
+*.mp4
 *.npy
 *.npz
 *.pkl

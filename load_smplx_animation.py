@@ -17,10 +17,25 @@ def animation_data_clear(obj):
     obj.data.animation_data_clear()
 
 
+def call_smplx_operator(name):
+    op = getattr(bpy.ops.object, name, None)
+    if op is None:
+        print(f"WARNING: bpy.ops.object.{name} not found. Install/enable the SMPL-X Blender add-on for full visualization.")
+        return False
+    try:
+        op('EXEC_DEFAULT')
+    except Exception as exc:
+        print(f"WARNING: bpy.ops.object.{name} failed: {exc}")
+        return False
+    return True
+
+
 def load_smplx_animation(file, obj):
     animation_data_clear(obj)
 
     armature = obj.parent
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
     bpy.context.view_layer.objects.active = obj  # mesh needs to be active object for recalculating joint locations
 
     with np.load("./smplx_handposes.npz", allow_pickle=True) as data:
@@ -45,7 +60,7 @@ def load_smplx_animation(file, obj):
         else:
             print(f"ERROR: No key block for: {key_block_name}")
 
-    bpy.ops.object.smplx_update_joint_locations('EXEC_DEFAULT')
+    call_smplx_operator('smplx_update_joint_locations')
 
     global_orients = np.array([get_quat_from_rodrigues(rodrigues) for rodrigues in global_orient])
     body_poses = {bone_name: np.array([get_quat_from_rodrigues(rodrigues) for rodrigues in body_pose[:, index, :]])
@@ -80,7 +95,7 @@ def load_smplx_animation(file, obj):
     bpy.context.scene.frame_set(0)
 
     # Activate corrective poseshapes
-    bpy.ops.object.smplx_set_poseshapes('EXEC_DEFAULT')
+    call_smplx_operator('smplx_set_poseshapes')
 
     return {'FINISHED'}
 

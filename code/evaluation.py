@@ -441,6 +441,13 @@ def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
     end_idx = np.asarray(motion_dict["end_idx"], dtype=np.int64)
     text = motion_dict.get("text", [None] * len(start_idx))
     size = len(start_idx)
+    candidate_indices = np.arange(size)
+
+    if args.reference_split not in [None, "None", "none", "null"]:
+        split_path = folder / args.reference_split_dir / f"{args.reference_split}_idx.npy"
+        if not split_path.exists():
+            raise RuntimeError(f"Reference split file does not exist: {split_path}")
+        candidate_indices = np.load(split_path).astype(np.int64)
 
     expected_span = int(args.reference_window_size) * int(args.reference_step)
     mask = (end_idx - start_idx) == expected_span
@@ -454,7 +461,8 @@ def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
         text_mask = np.asarray([query in (normalize_label(item) or "").lower() for item in text], dtype=bool)
         mask &= text_mask
 
-    indices = np.flatnonzero(mask)
+    mask_indices = np.flatnonzero(mask)
+    indices = np.intersect1d(candidate_indices, mask_indices, assume_unique=False)
     if indices.size == 0:
         raise RuntimeError("No GT reference clips matched the reference_dataset filters.")
 
@@ -894,6 +902,8 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--reference-joints-file", default=config_default(config, "reference_joints_file", "human_joints_aligned.npy"))
+    parser.add_argument("--reference-split", default=config_default(config, "reference_split", None), help="Optional GT split name: train, val, or test.")
+    parser.add_argument("--reference-split-dir", default=config_default(config, "reference_split_dir", "splits"))
     parser.add_argument("--reference-max-samples", type=int, default=config_default(config, "reference_max_samples", 5000))
     parser.add_argument("--reference-sample-seed", type=int, default=config_default(config, "reference_sample_seed", None))
     parser.add_argument("--reference-step", type=int, default=config_default(config, "reference_step", 3))
