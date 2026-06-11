@@ -20,6 +20,10 @@ To run the code, you need to have the following installed:
 
 3. **Install Python Packages**:
     ```sh
+    conda create -n hsi python=3.10 -y
+    conda activate hsi
+
+    python -m pip install --upgrade pip
     pip install -r requirements.txt
     ```
 
