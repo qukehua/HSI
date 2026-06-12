@@ -24,7 +24,8 @@ tmp/
 temp/
 
 # Datasets and large binary assets
-dataset
+dataset_full
+dataset_window
 dataset/
 datasets
 datasets/

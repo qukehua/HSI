@@ -78,7 +78,21 @@ cd code
 Creat train, validation, and test dataset:
 
 ```bash
-python create_dataset_splits.py
+python preprocess_full_horizon_dataset.py \
+  --dataset-dir ../dataset_window \
+  --output-dir ../dataset_full \
+  --t-max 120 \
+  --step 3 \
+  --long-policy truncate \
+  --split-mode scene
+
+
+python create_dataset_splits.py \
+  --dataset-dir ../dataset_full \
+  --format auto \
+  --split-mode scene
+
+
 ```
 To start training the model, run the training script from the command line:
 

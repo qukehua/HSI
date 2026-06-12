@@ -1,5 +1,4 @@
 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
---extra-index-url https://download.pytorch.org/whl/cu117
 absl-py==2.1.0
 antlr4-python3-runtime==4.9.3
 cachetools==5.5.0
@@ -37,9 +36,9 @@ six==1.17.0
 smplx==0.1.28
 tensorboard==2.14.0
 tensorboard-data-server==0.7.2
-torch==1.13.1+cu117
-torchaudio==0.13.1+cu117
-torchvision==0.14.1+cu117
+torch @ https://mirrors.aliyun.com/pytorch-wheels/cu117/torch-1.13.1%2Bcu117-cp310-cp310-linux_x86_64.whl
+torchaudio @ https://mirrors.aliyun.com/pytorch-wheels/cu117/torchaudio-0.13.1%2Bcu117-cp310-cp310-linux_x86_64.whl
+torchvision @ https://mirrors.aliyun.com/pytorch-wheels/cu117/torchvision-0.14.1%2Bcu117-cp310-cp310-linux_x86_64.whl
 tqdm==4.67.1
 typing_extensions==4.12.2
 urllib3==2.2.3
