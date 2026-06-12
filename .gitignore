@@ -27,8 +27,6 @@ temp/
 dataset_full
 dataset_window
 dataset/
-datasets
-datasets/
 smpl_models/
 *.pdf
 *.zip

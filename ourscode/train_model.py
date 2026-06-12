@@ -1,3 +1,18 @@
+import os
+import sys
+import datetime
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(SCRIPT_DIR))
+os.environ.setdefault('ROOT_DIR', str(PROJECT_ROOT))
+os.environ['HYDRA_FULL_ERROR'] = '1'
+os.environ['CURRENT_TIME'] = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
+os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+os.environ['NCCL_P2P_DISABLE'] = '0'
+os.environ['NCCL_IB_DISABLE'] = '0'
+
 import torch
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
@@ -6,21 +21,9 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.optim import Adam
 from utils import *
 from constants import *
-import os
 from torch.utils.tensorboard import SummaryWriter
-import datetime
 from datasets.lingo import LingoDataset
 from tqdm.auto import tqdm
-
-os.environ['ROOT_DIR'] = '..'
-os.environ['HYDRA_FULL_ERROR'] = '1'
-os.environ['CURRENT_TIME'] = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
-os.environ['NCCL_P2P_DISABLE'] = '0'
-os.environ['NCCL_IB_DISABLE'] = '0'
-
-import sys
-sys.path.append(os.path.join(os.environ['ROOT_DIR'], 'code'))
 
 
 def get_split_subset(dataset, dataset_cfg, split_name):

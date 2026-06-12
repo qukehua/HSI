@@ -5,6 +5,12 @@ import sys
 import numpy as np
 import torch
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(SCRIPT_DIR))
+os.environ.setdefault('ROOT_DIR', str(PROJECT_ROOT))
+
 from omegaconf import DictConfig, OmegaConf
 from scipy.spatial.transform import Rotation as R
 from tqdm.auto import tqdm
@@ -381,7 +387,7 @@ def sample(cfg: DictConfig) -> None:
 if __name__ == '__main__':
     os.environ['HYDRA_FULL_ERROR'] = '1'
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    os.environ['ROOT_DIR'] = '../'
+    os.environ.setdefault('ROOT_DIR', str(PROJECT_ROOT))
 
     OmegaConf.register_new_resolver("times", lambda x, y: int(x) * int(y))
     sample()
