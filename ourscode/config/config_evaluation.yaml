@@ -1,0 +1,81 @@
+# Evaluation config for code/evaluation.py.
+# CLI arguments override these values, for example:
+# python evaluation.py --config config/config_evaluation.yaml --metrics locomotion
+
+# Files, directories, or globs produced by sample_lingo.py or your own sampler.
+# Required. Fill this before running without --generated.
+generated: [../results/outputs/output__demo-21__0.pkl]
+
+# GT/reference motions or features for FID, Precision, Recall, and F1.
+# Leave empty when you only need diversity, locomotion, or reaching metrics.
+reference: []
+
+# Optional: automatically slice GT clips from the LINGO dataset as reference.
+# This reads human_joints_aligned.npy with mmap and cuts many clips using
+# language_motion_dict start_idx/end_idx, so you do not need to create
+# reference_interactive.npz manually.
+reference_dataset: null
+reference_motion_dict: language_motion_dict/language_motion_dict__inter_and_loco__16.pkl
+reference_joints_file: human_joints_aligned.npy
+reference_split: null
+reference_split_dir: splits
+reference_max_samples: 5000
+reference_sample_seed: null
+reference_step: 3
+reference_window_size: 16
+
+# Optional GT filters. Keep null to use all clips. Set true/false to select.
+reference_text_contains: null
+reference_need_scene: null
+reference_need_pelvis_dir: null
+reference_need_hand_goal: null
+reference_need_pi: null
+
+# all, interactive, locomotion, or reaching.
+metrics: all
+
+# Optional JSON result file.
+output: null
+
+# General motion/evaluation settings.
+fps: 20.0
+seed: 42
+
+# Interactive metrics.
+# If inputs already contain features/embeddings, those are used directly.
+# Otherwise the script builds simple joint-motion features and projects them
+# to feature_dim before computing FID/diversity/P-R-F1.
+feature_frames: 64
+feature_dim: 512
+diversity_pairs: 200
+multimodality_pairs: 100
+precision_k: 3
+
+# Scene penetration metrics.
+# Use dataset/Scene_vis with the default eval grid, or dataset/Scene with:
+# scene_grid: [-3, 0, -4, 3, 2, 4, 300, 100, 400]
+scene_occ: null
+scene_grid: [-4, 0, -6, 4, 2, 6, 400, 100, 600]
+body_points: auto
+out_of_bounds_occupied: true
+
+# Foot sliding metrics.
+foot_joints: [7, 8, 10, 11]
+floor_height: null
+contact_height: 0.05
+contact_velocity: 0.10
+
+# Object reaching metrics.
+goal: null
+goal_file: null
+hand_joints: [20, 21, 25, 26, 27, 40, 49]
+reach_threshold: 0.20
+
+# SMPL-X conversion settings for sample_lingo.py output pkl files.
+# Required when generated files contain transl/body_pose/global_orient.
+smpl_dir: ../smpl_models
+gender: male
+device: cuda
+smpl_batch_size: 256
+compute_vertices: false
+joints_ind: null
