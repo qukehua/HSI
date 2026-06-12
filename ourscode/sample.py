@@ -226,7 +226,8 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
 
         if seg_id == 0:
             stand_start_idx_list = [100]
-            joints, mat, _, _, _, _, _, _, _, _, _, _ = sampler_body.dataset.__getitem__(stand_start_idx_list[0])
+            sample_item = sampler_body.dataset.__getitem__(stand_start_idx_list[0])
+            joints, mat = sample_item[0], sample_item[1]
             joints = torch.from_numpy(joints).float().reshape(1, -1, cfg.dataset.nb_joints*3)
             mat = torch.from_numpy(mat).float().reshape(1, 4, 4)
 

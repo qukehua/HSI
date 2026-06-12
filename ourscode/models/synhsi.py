@@ -23,6 +23,7 @@ class Sampler:
         self.aux_loss_weights = kwargs.get('aux_loss_weights', {
             'pelvis_traj': 0.5,
             'duration': 0.2,
+            'valid_mask': 0.1,
             'smoothness': 0.05,
         })
         self.get_scheduler()
@@ -62,11 +63,38 @@ class Sampler:
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
 
-    def p_losses(self, x_start, mat, scene_flag, mask, t, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, noise=None, loss_type='huber'):
+    def p_losses(
+            self,
+            x_start,
+            mat,
+            scene_flag,
+            mask,
+            t,
+            text_emb,
+            pelvis_goal,
+            hand_goal,
+            is_pick,
+            need_scene,
+            need_pelvis_dir,
+            pi,
+            need_pi,
+            is_loco,
+            length=None,
+            valid_mask=None,
+            object_present=None,
+            noise=None,
+            loss_type='huber',
+    ):
         if noise is None:
             noise = torch.randn_like(x_start)
 
-        noise[mask] = 0.
+        if valid_mask is None:
+            valid_mask = torch.ones(x_start.shape[:2], dtype=torch.bool, device=x_start.device)
+        else:
+            valid_mask = valid_mask.to(device=x_start.device, dtype=torch.bool)
+        loss_mask = torch.logical_or(mask, torch.logical_not(valid_mask).unsqueeze(-1))
+
+        noise[loss_mask] = 0.
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -131,11 +159,12 @@ class Sampler:
             need_pelvis_dir,
             pi,
             need_pi,
+            object_present=object_present,
             return_dict=self.use_aux_losses,
         )
         predicted_noise = model_out["pred_noise"] if isinstance(model_out, dict) else model_out
 
-        mask_inv = torch.logical_not(mask)
+        mask_inv = torch.logical_not(loss_mask)
 
         if loss_type == 'l1':
             loss = F.l1_loss(noise[mask_inv], predicted_noise[mask_inv])
@@ -147,13 +176,21 @@ class Sampler:
             raise NotImplementedError()
 
         if self.use_aux_losses:
-            valid_frame = torch.ones(x_start.shape[:2], device=x_start.device, dtype=x_start.dtype)
+            valid_frame = valid_mask.to(dtype=x_start.dtype)
             pelvis_gt = x_start[..., :3]
             pelvis_loss = (torch.abs(model_out["pelvis_traj_dense"] - pelvis_gt) * valid_frame.unsqueeze(-1)).sum()
             pelvis_loss = pelvis_loss / valid_frame.sum().clamp_min(1.0)
 
-            end_target = valid_frame.sum(dim=1).long().clamp(min=1, max=x_start.shape[1]) - 1
+            if length is None:
+                length = valid_frame.sum(dim=1).long()
+            else:
+                length = length.to(device=x_start.device, dtype=torch.long)
+            end_target = length.clamp(min=1, max=x_start.shape[1]) - 1
             duration_loss = F.cross_entropy(model_out["end_logits"], end_target)
+            valid_loss = F.binary_cross_entropy(
+                model_out["valid_mask_prob"].clamp(min=1e-6, max=1.0 - 1e-6),
+                valid_mask.to(dtype=x_start.dtype),
+            )
 
             if predicted_noise.shape[1] > 2:
                 smooth = predicted_noise[:, 2:] - 2 * predicted_noise[:, 1:-1] + predicted_noise[:, :-2]
@@ -165,6 +202,7 @@ class Sampler:
                 loss
                 + self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
                 + self.aux_loss_weights.get('duration', 0.2) * duration_loss
+                + self.aux_loss_weights.get('valid_mask', 0.1) * valid_loss
                 + self.aux_loss_weights.get('smoothness', 0.05) * smooth_loss
             )
 

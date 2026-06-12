@@ -36,13 +36,13 @@ def get_split_subset(dataset, dataset_cfg, split_name):
 
 
 def move_lingo_batch(batch, device):
-    joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = batch
+    joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = batch
     return joints.to(device), \
            mat.to(device), scene_flag.to(device), \
            text_clip_embedding.to(device), \
            pelvis_goal.to(device), hand_goal.to(device), \
            is_pick.to(device), need_scene.to(device), need_pelvis_dir.to(device), pi.to(device), \
-           need_pi.to(device), is_loco.to(device)
+           need_pi.to(device), is_loco.to(device), length.to(device), valid_mask.to(device), object_present.to(device)
 
 
 @torch.no_grad()
@@ -53,11 +53,16 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
 
     progress = tqdm(dataloader, desc=f"Val {epoch}", disable=not show_progress, leave=False)
     for batch in progress:
-        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = move_lingo_batch(batch, device)
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = move_lingo_batch(batch, device)
         batch_size = joints.shape[0]
         t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
         mask, _, _ = get_mask(joints, -1, p=1., fixed_frame=cfg.auto_regre_num)
-        loss = trainer.p_losses(joints, mat, scene_flag, mask, t, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
+        loss = trainer.p_losses(
+            joints, mat, scene_flag, mask, t,
+            text_clip_embedding, pelvis_goal, hand_goal,
+            is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
+            length=length, valid_mask=valid_mask, object_present=object_present,
+        )
         total_loss += loss.detach() * batch_size
         total_count += batch_size
         progress.set_postfix(loss=f"{loss.item():.4f}")
@@ -130,13 +135,19 @@ def train_ddp(rank, world_size, cfg):
             step += 1
             optimizer.zero_grad()
 
-            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco = move_lingo_batch(batch, device)
+            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = move_lingo_batch(batch, device)
 
-            t = torch.randint(0, trainer.timesteps, (cfg.batch_size,), device=device).long()
+            batch_size = joints.shape[0]
+            t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
             with torch.no_grad():
                 mask, _, _ = get_mask(joints, -1, p=1., fixed_frame=cfg.auto_regre_num)
 
-            loss = trainer.p_losses(joints, mat, scene_flag, mask, t, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
+            loss = trainer.p_losses(
+                joints, mat, scene_flag, mask, t,
+                text_clip_embedding, pelvis_goal, hand_goal,
+                is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
+                length=length, valid_mask=valid_mask, object_present=object_present,
+            )
 
             if step % 10 == 0:
                 print(f"Epoch: {epoch}, Step: {step} / {len(dataloader)}   Loss: {loss.item()}", flush=True)

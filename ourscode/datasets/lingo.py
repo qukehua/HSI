@@ -1,24 +1,43 @@
+import json
 import os
-import torch
-import numpy as np
-from scipy.spatial.transform import Rotation as R
-from torch.utils.data import Dataset
 import pickle as pkl
+from pathlib import Path
+
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
 
 class LingoDataset(Dataset):
-    def __init__(self, folder, device, mesh_grid, batch_size, step, nb_voxels, train=True,
-                 load_scene=True, load_language=True, load_pelvis_goal=False, load_hand_goal=False,
-                 max_window_size=16,
-                 use_pi=True,
-                 split=None,
-                 split_dir='splits',
-                 vis=True,
-                 start_type='stand',
-                 test_scene_name=None,
-                 **kwargs):
+    """Full-horizon padded LINGO/HSI dataset.
 
-        self.folder = folder
+    Expected folder layout is produced by preprocess_full_horizon_dataset.py.
+    The class name stays LingoDataset so the existing Hydra config and training
+    script can keep importing datasets.lingo.LingoDataset.
+    """
+
+    def __init__(
+            self,
+            folder,
+            device,
+            mesh_grid,
+            batch_size,
+            step=3,
+            nb_voxels=(32, 32, 32),
+            train=True,
+            load_scene=True,
+            load_language=True,
+            load_pelvis_goal=True,
+            load_hand_goal=True,
+            max_window_size=None,
+            use_pi=True,
+            split=None,
+            split_dir="splits",
+            scene_source_dir=None,
+            test_scene_name=None,
+            **kwargs,
+    ):
+        self.folder = Path(folder)
         self.device = device
         self.train = train
         self.load_scene = load_scene
@@ -28,190 +47,122 @@ class LingoDataset(Dataset):
         self.use_pi = use_pi
         self.split = split
         self.split_dir = split_dir
-        self.vis = vis
-        self.start_type = start_type
         self.test_scene_name = test_scene_name
-        self.max_window_size = max_window_size
-
-        self.global_orient = np.load(os.path.join(folder, 'human_orient.npy'))
-        self.joints = np.load(os.path.join(folder, 'human_joints_aligned.npy'))
-
-        if self.load_language:
-            if self.max_window_size == 16:
-                language_motion_dict_filename = 'language_motion_dict__inter_and_loco__16.pkl'
-
-            with open(os.path.join(self.folder, 'language_motion_dict', language_motion_dict_filename), 'rb') as f:
-                language_motion_dict = pkl.load(f)
-            self.end_range = language_motion_dict['end_range']
-            self.text = language_motion_dict['text']
-
-            self.clip_features = np.load(os.path.join(self.folder, 'clip_features.npy'))
-            with open(os.path.join(self.folder, 'text2features_idx.pkl'), 'rb') as f:
-                self.text2features_idx = pkl.load(f)
-
-            self.need_scene = language_motion_dict['need_scene']
-            self.need_pelvis_dir = language_motion_dict['need_pelvis_dir']
-            self.pi = language_motion_dict['pi']
-            self.need_pi = language_motion_dict['need_pi']
-            self.left_hand_inter_frame = language_motion_dict['left_hand_inter_frame']
-            self.right_hand_inter_frame = language_motion_dict['right_hand_inter_frame']
-
-            self.start_ind = language_motion_dict['start_idx']
-            self.end_ind = language_motion_dict['end_idx']
-
-            if self.split not in [None, 'None', 'none', 'null']:
-                split_path = os.path.join(self.folder, self.split_dir, f'{self.split}_idx.npy')
-                split_idx = np.load(split_path)
-                self.start_ind = self.start_ind[split_idx]
-                self.end_ind = self.end_ind[split_idx]
-                self.text = [self.text[idx] for idx in split_idx]
-                self.end_range = self.end_range[split_idx]
-                self.need_scene = self.need_scene[split_idx]
-                self.need_pelvis_dir = self.need_pelvis_dir[split_idx]
-                self.pi = self.pi[split_idx]
-                self.need_pi = self.need_pi[split_idx]
-                self.left_hand_inter_frame = self.left_hand_inter_frame[split_idx]
-                self.right_hand_inter_frame = self.right_hand_inter_frame[split_idx]
-
-            if self.vis:  # for sampling first two frames
-                if self.start_type == 'stand':
-                    valid_idx = np.load('datasets/valid_idx_stand.npy')
-                    self.start_ind = self.start_ind[valid_idx]
-                    self.end_ind = self.end_ind[valid_idx]
-                    self.text = [self.text[idx] for idx in valid_idx]
-                elif self.start_type == 'sit':
-                    valid_idx = np.load('datasets/valid_idx_sit.npy')
-                    self.start_ind = self.start_ind[valid_idx]
-                    self.end_ind = self.end_ind[valid_idx]
-                    self.text = [self.text[idx] for idx in valid_idx]
-
         self.step = step
         self.batch_size = batch_size
+        self.nb_voxels = list(nb_voxels)
+        self.mesh_grid = mesh_grid
 
-        if self.load_scene:
-            self.mesh_grid = mesh_grid
-            self.nb_voxels = nb_voxels
-            self.scene_occ = []
-            self.scene_dict = {}
-            with open(os.path.join(folder, 'scene_name.pkl'), 'rb') as f:
-                self.scene_name = pkl.load(f) # list of scene names
-            if train:
-                self.scene_folder = os.path.join(folder, 'Scene')
-                scene_file_list = sorted(os.listdir(self.scene_folder))
-            else:
-                self.scene_folder = os.path.join(folder, 'Scene_vis')
-                scene_file_list = sorted(os.listdir(self.scene_folder))
-                scene_file_list = [file for file in scene_file_list if file.split('.')[0] == self.test_scene_name]
+        self.human_motion = np.load(self.folder / "human_motion.npy", mmap_mode="r")
+        self.valid_mask = np.load(self.folder / "valid_mask.npy", mmap_mode="r")
+        self.length = np.load(self.folder / "length.npy", mmap_mode="r")
+        self.text_emb = np.load(self.folder / "text_emb.npy", mmap_mode="r")
+        self.mat = np.load(self.folder / "mat.npy", mmap_mode="r")
+        self.pelvis_goal = np.load(self.folder / "pelvis_goal.npy", mmap_mode="r")
+        self.hand_goal = np.load(self.folder / "hand_goal.npy", mmap_mode="r")
+        self.is_pick = np.load(self.folder / "is_pick.npy", mmap_mode="r")
+        self.need_scene = np.load(self.folder / "need_scene.npy", mmap_mode="r")
+        self.need_pelvis_dir = np.load(self.folder / "need_pelvis_dir.npy", mmap_mode="r")
+        self.pi = np.load(self.folder / "pi.npy", mmap_mode="r")
+        self.need_pi = np.load(self.folder / "need_pi.npy", mmap_mode="r")
+        self.object_present = np.load(self.folder / "object_present.npy", mmap_mode="r")
 
-            for sid, file in enumerate(scene_file_list):
-                print(f"{sid} Loading Scene Mesh {file}")
-                scene_occ = np.load(os.path.join(self.scene_folder, file))
-                scene_occ = torch.from_numpy(scene_occ).to(device=device, dtype=bool)
-                self.scene_occ.append(scene_occ)
-                self.scene_dict[file[:-4]] = sid
-            self.scene_occ = torch.stack(self.scene_occ)
+        with open(self.folder / "scene_name.pkl", "rb") as f:
+            self.scene_name = pkl.load(f)
+        with open(self.folder / "text.pkl", "rb") as f:
+            self.text = pkl.load(f)
 
-            if train:
-                self.scene_grid_np = np.array([-3, 0, -4, 3, 2, 4, 300, 100, 400])
-                self.scene_grid_torch = torch.tensor([-3, 0, -4, 3, 2, 4, 300, 100, 400]).to(device)
-            else:
-                self.scene_grid_np = np.array([-4, 0, -6, 4, 2, 6, 400, 100, 600])
-                self.scene_grid_torch = torch.tensor([-4, 0, -6, 4, 2, 6, 400, 100, 600]).to(device)
+        self.max_window_size = int(max_window_size or self.human_motion.shape[1])
+        if self.max_window_size != self.human_motion.shape[1]:
+            raise ValueError(
+                f"Config max_window_size={self.max_window_size} does not match "
+                f"human_motion length={self.human_motion.shape[1]} in {self.folder}."
+            )
 
-            self.batch_id = torch.linspace(0, batch_size - 1, batch_size).tile((nb_voxels[0]*nb_voxels[1]*nb_voxels[2], 1)).T \
-                .reshape(-1, 1).to(device=device, dtype=torch.long)
+        self.indices = np.arange(len(self.length), dtype=np.int64)
+        if self.split not in [None, "None", "none", "null"]:
+            split_path = self.folder / self.split_dir / f"{self.split}_idx.npy"
+            self.indices = np.load(split_path).astype(np.int64)
 
-        if self.max_window_size == 16:
-            norm = np.load(os.path.join(folder, 'norm_inter_and_loco__16frames.npy'))
+        metadata_path = self.folder / "metadata.json"
+        self.metadata = {}
+        if metadata_path.exists():
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                self.metadata = json.load(f)
 
-        self.min = norm[0].astype(np.float32)
-        self.max = norm[1].astype(np.float32)
+        self.normalize_enabled = bool(self.metadata.get("normalize", True))
+        raw_dataset_dir = scene_source_dir or self.metadata.get("dataset_dir")
+        self.scene_source_dir = Path(raw_dataset_dir).resolve() if raw_dataset_dir else self.folder
+
+        norm_path = self.scene_source_dir / "norm_inter_and_loco__16frames.npy"
+        if norm_path.exists():
+            norm = np.load(norm_path)
+            self.min = norm[0].astype(np.float32)
+            self.max = norm[1].astype(np.float32)
+        else:
+            self.min = np.zeros(3, dtype=np.float32)
+            self.max = np.ones(3, dtype=np.float32)
+            self.normalize_enabled = False
         self.min_torch = torch.tensor(self.min).to(device)
         self.max_torch = torch.tensor(self.max).to(device)
 
-    def __getitem__(self, idx):
-        if self.load_language:
-            start_idx = int(self.start_ind[idx])
-            end_idx = int(self.end_ind[idx])
-            assert end_idx - start_idx == self.max_window_size * 3
+        self.scene_occ = None
+        self.scene_dict = {}
+        if self.load_scene:
+            self._load_scenes()
 
-            pelvis_goal = np.zeros((3, )).astype(np.float32)
-            hand_goal = np.zeros((3, )).astype(np.float32)
-            is_pick = np.zeros((1, )).astype(bool)
-            is_loco = False
+    def _load_scenes(self):
+        scene_folder = self.scene_source_dir / ("Scene" if self.train else "Scene_vis")
+        scene_file_list = sorted(os.listdir(scene_folder))
+        if not self.train and self.test_scene_name not in [None, "None", "none", "null"]:
+            scene_file_list = [name for name in scene_file_list if name.split(".")[0] == self.test_scene_name]
 
-            text = self.text[idx][0]
-            text_clip_embedding = self.clip_features[[self.text2features_idx[text]]]  # (1, 768)
-            text_clip_embedding = torch.from_numpy(text_clip_embedding).float()
-            text_clip_embedding = text_clip_embedding / torch.norm(text_clip_embedding, dim=1, keepdim=True)
+        scene_occ = []
+        for sid, file_name in enumerate(scene_file_list):
+            print(f"{sid} Loading Scene Mesh {file_name}")
+            occ = np.load(scene_folder / file_name)
+            scene_occ.append(torch.from_numpy(occ).to(device=self.device, dtype=torch.bool))
+            self.scene_dict[file_name[:-4]] = sid
+        if len(scene_occ) == 0:
+            raise RuntimeError(f"No scene files found in {scene_folder}.")
+        self.scene_occ = torch.stack(scene_occ)
 
-            left_hand_inter_frame = self.left_hand_inter_frame[idx]
-            right_hand_inter_frame = self.right_hand_inter_frame[idx]
-
-            if left_hand_inter_frame != -1:
-                hand_goal = self.joints[left_hand_inter_frame, 24].copy()  # left hand index1
-                is_pick = np.ones((1,)).astype(bool)
-            elif right_hand_inter_frame != -1:
-                hand_goal = self.joints[right_hand_inter_frame, 26].copy()  # right hand index1
-                is_pick = np.ones((1,)).astype(bool)
-
-            need_scene = self.need_scene[idx]
-            need_pelvis_dir = self.need_pelvis_dir[idx]
-            pi = self.pi[idx]
-            need_pi = self.need_pi[idx]
-            if need_pi:
-                pi = pi + np.random.randint(-5, 5)
-                pi = max(pi, 0)
-
-            if need_pelvis_dir:
-                if 'sit down' in text or 'lie down' in text:
-                    pelvis_goal = self.joints[int(self.end_range[idx]), 0].copy()
-                else:
-                    pelvis_goal = self.joints[end_idx-3, 0].copy()
-                    is_loco = True
-                pelvis_goal[1] = 0.
-
-        joints = self.joints[start_idx: end_idx: self.step]
-        init_joints = np.array([joints[0, 0, 0], 0., joints[0, 0, 2]])
-        joints = joints - init_joints
-        pelvis_goal = pelvis_goal - init_joints
-        hand_goal = hand_goal - init_joints
-
-        global_orient = self.global_orient[start_idx: end_idx: self.step]
-        init_global_orient = global_orient[0]
-        init_global_orient_euler = R.from_rotvec(init_global_orient).as_euler('zxy')
-        shift_euler = np.array([0, 0, -init_global_orient_euler[2]])
-        shift_rot_matrix = R.from_euler('zxy', shift_euler).as_matrix()
-
-        mat = np.eye(4)
-        mat[:3, :3] = np.linalg.inv(shift_rot_matrix.T).T
-        mat[:3, 3] = init_joints
-        mat = mat.astype(np.float32)
-
-        joints = joints @ shift_rot_matrix.T
-        pelvis_goal = pelvis_goal @ shift_rot_matrix.T
-        hand_goal = hand_goal @ shift_rot_matrix.T
-
-        if is_loco:
-            pelvis_goal_norm = np.linalg.norm(pelvis_goal)
-            if pelvis_goal_norm >= 0.8:
-                pelvis_goal = pelvis_goal / pelvis_goal_norm * 0.8
-
-        joints = self.normalize(joints)
-        joints = joints.astype(np.float32).reshape((joints.shape[0], -1))
-
-        if self.train and self.load_scene:
-            scene_flag = self.scene_dict[self.scene_name[start_idx]]
+        if self.train:
+            self.scene_grid_np = np.array([-3, 0, -4, 3, 2, 4, 300, 100, 400])
+            self.scene_grid_torch = torch.tensor([-3, 0, -4, 3, 2, 4, 300, 100, 400]).to(self.device)
         else:
-            scene_flag = 0
+            self.scene_grid_np = np.array([-4, 0, -6, 4, 2, 6, 400, 100, 600])
+            self.scene_grid_torch = torch.tensor([-4, 0, -6, 4, 2, 6, 400, 100, 600]).to(self.device)
 
-        if not self.use_pi:
-            pi = 0
-            need_pi = False
+        grid_count = self.nb_voxels[0] * self.nb_voxels[1] * self.nb_voxels[2]
+        self.batch_id = torch.linspace(0, self.batch_size - 1, self.batch_size).tile((grid_count, 1)).T
+        self.batch_id = self.batch_id.reshape(-1, 1).to(device=self.device, dtype=torch.long)
 
-        return joints.astype(np.float32), mat.astype(np.float32), scene_flag, \
-                text_clip_embedding, pelvis_goal.astype(np.float32), hand_goal.astype(np.float32), \
-                is_pick, need_scene, need_pelvis_dir, int(pi), need_pi, is_loco
+    def __getitem__(self, idx):
+        src_idx = int(self.indices[idx])
+        scene_name = self.scene_name[src_idx]
+        scene_flag = self.scene_dict.get(scene_name, 0) if self.load_scene else 0
+
+        pi = int(self.pi[src_idx]) if self.use_pi else 0
+        need_pi = bool(self.need_pi[src_idx]) if self.use_pi else False
+
+        return (
+            np.asarray(self.human_motion[src_idx], dtype=np.float32),
+            np.asarray(self.mat[src_idx], dtype=np.float32),
+            np.asarray(scene_flag, dtype=np.int64),
+            np.asarray(self.text_emb[src_idx], dtype=np.float32),
+            np.asarray(self.pelvis_goal[src_idx], dtype=np.float32),
+            np.asarray(self.hand_goal[src_idx], dtype=np.float32),
+            np.asarray([self.is_pick[src_idx]], dtype=np.bool_),
+            np.asarray(self.need_scene[src_idx], dtype=np.bool_),
+            np.asarray(self.need_pelvis_dir[src_idx], dtype=np.bool_),
+            np.asarray(pi, dtype=np.int64),
+            np.asarray(need_pi, dtype=np.bool_),
+            np.asarray(False, dtype=np.bool_),
+            np.asarray(self.length[src_idx], dtype=np.int64),
+            np.asarray(self.valid_mask[src_idx], dtype=np.bool_),
+            np.asarray(self.object_present[src_idx], dtype=np.bool_),
+        )
 
     def get_occ_for_points(self, points, scene_flag):
         batch_size = points.shape[0]
@@ -233,9 +184,7 @@ class LingoDataset(Dataset):
         else:
             occ_for_points = occ[0, voxel[:, 0], voxel[:, 1], voxel[:, 2]]
         occ_for_points[torch.logical_not(in_bound)] = True
-        occ_for_points = occ_for_points.reshape(batch_size, seq_len, -1)
-
-        return occ_for_points
+        return occ_for_points.reshape(batch_size, seq_len, -1)
 
     def create_meshgrid(self, batch_size=1):
         bbox = self.mesh_grid
@@ -243,43 +192,41 @@ class LingoDataset(Dataset):
         x = torch.linspace(bbox[0], bbox[1], size[0])
         y = torch.linspace(bbox[2], bbox[3], size[1])
         z = torch.linspace(bbox[4], bbox[5], size[2])
-        xx, yy, zz = torch.meshgrid(x, y, z, indexing='ij')
+        xx, yy, zz = torch.meshgrid(x, y, z, indexing="ij")
         grid = torch.stack([xx, yy, zz], dim=-1).reshape(-1, 3)
-        grid = grid.repeat(batch_size, 1, 1)
-
-        return grid
+        return grid.repeat(batch_size, 1, 1)
 
     def __len__(self):
-        return len(self.start_ind)
+        return len(self.indices)
 
     def normalize(self, data):
+        if not self.normalize_enabled:
+            return data
         shape_orig = data.shape
         data = data.reshape((-1, 3))
         data = -1. + 2. * (data - self.min) / (self.max - self.min)
-        data = data.reshape(shape_orig)
-
-        return data
+        return data.reshape(shape_orig)
 
     def normalize_torch(self, data):
+        if not self.normalize_enabled:
+            return data
         shape_orig = data.shape
         data = data.reshape((-1, 3))
         data = -1. + 2. * (data - self.min_torch) / (self.max_torch - self.min_torch)
-        data = data.reshape(shape_orig)
-
-        return data
+        return data.reshape(shape_orig)
 
     def denormalize(self, data):
+        if not self.normalize_enabled:
+            return data
         shape_orig = data.shape
         data = data.reshape((-1, 3))
         data = (data + 1.) * (self.max - self.min) / 2. + self.min
-        data = data.reshape(shape_orig)
-
-        return data
+        return data.reshape(shape_orig)
 
     def denormalize_torch(self, data):
+        if not self.normalize_enabled:
+            return data
         shape_orig = data.shape
         data = data.reshape((-1, 3))
         data = (data + 1.) * (self.max_torch - self.min_torch) / 2. + self.min_torch
-        data = data.reshape(shape_orig)
-
-        return data
+        return data.reshape(shape_orig)

@@ -44,7 +44,7 @@ mm_skip_existing: true
 
 scene_type: occ_two
 
-max_window_size: 16
+max_window_size: 120
 
 motion_len: 10000000
 

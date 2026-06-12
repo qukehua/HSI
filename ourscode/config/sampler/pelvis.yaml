@@ -9,8 +9,9 @@ pelvis:
   timesteps: 100
   motion_len: ${motion_len}
   scene_type: ${scene_type}
-  use_aux_losses: false
+  use_aux_losses: true
   aux_loss_weights:
     pelvis_traj: 0.5
     duration: 0.2
+    valid_mask: 0.1
     smoothness: 0.05
