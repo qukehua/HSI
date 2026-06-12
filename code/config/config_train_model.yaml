@@ -17,6 +17,12 @@ epochs: 300
 device: cuda:0
 ckpt_name: None
 use_tensorboard: true
+use_wandb: true
+wandb_project: HSI-ours
+wandb_entity: null
+wandb_run_name: ${exp_name}
+wandb_mode: online
+log_interval: 10
 ckpt_interval: 50
 use_validation: true
 val_split: val

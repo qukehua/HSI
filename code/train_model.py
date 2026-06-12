@@ -1,6 +1,7 @@
 import os
 import sys
 import datetime
+import json
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -24,6 +25,57 @@ from constants import *
 from torch.utils.tensorboard import SummaryWriter
 from datasets.lingo import LingoDataset
 from tqdm.auto import tqdm
+
+
+class TeeStream:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def setup_rank_logging(cfg, rank):
+    os.makedirs(cfg.exp_dir, exist_ok=True)
+    log_path = os.path.join(cfg.exp_dir, f"train_rank{rank}.log")
+    log_file = open(log_path, "a", buffering=1, encoding="utf-8")
+    stdout_orig = sys.stdout
+    stderr_orig = sys.stderr
+    sys.stdout = TeeStream(stdout_orig, log_file)
+    sys.stderr = TeeStream(stderr_orig, log_file)
+    return log_file, stdout_orig, stderr_orig
+
+
+def write_jsonl(path, payload):
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload) + "\n")
+
+
+def init_wandb(cfg, rank):
+    if rank != 0 or not cfg.get("use_wandb", False):
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("WandB is enabled but wandb is not installed. Install it with `pip install wandb`.", flush=True)
+        return None
+
+    wandb_kwargs = {
+        "project": cfg.get("wandb_project", "HSI-ours"),
+        "name": cfg.get("wandb_run_name", cfg.exp_name),
+        "mode": cfg.get("wandb_mode", "online"),
+        "config": OmegaConf.to_container(cfg, resolve=True),
+        "dir": cfg.exp_dir,
+    }
+    if cfg.get("wandb_entity", None) not in [None, "null", "None"]:
+        wandb_kwargs["entity"] = cfg.wandb_entity
+    return wandb.init(**wandb_kwargs)
 
 
 def get_split_subset(dataset, dataset_cfg, split_name):
@@ -91,6 +143,7 @@ def train_ddp(rank, world_size, cfg):
 
     device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
     cfg.device = f"cuda:{rank}"
+    rank_log_file, stdout_orig, stderr_orig = setup_rank_logging(cfg, rank)
     print(f'Training on {device}', flush=True)
     print('Initializing Distributed', flush=True)
     torch.distributed.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -122,8 +175,14 @@ def train_ddp(rank, world_size, cfg):
 
     if cfg.use_tensorboard and rank == 0:
         writer = SummaryWriter(log_dir=os.path.join(cfg.exp_dir, 'tensorboard_logs'))
+    else:
+        writer = None
+
+    wandb_run = init_wandb(cfg, rank)
+    metrics_path = os.path.join(cfg.exp_dir, "metrics.jsonl")
 
     best_val_loss = float('inf')
+    global_step = 0
 
     for epoch in range(cfg.epochs):
         if rank == 0:
@@ -133,6 +192,7 @@ def train_ddp(rank, world_size, cfg):
         progress = tqdm(dataloader, desc=f"Train {epoch}", disable=rank != 0, leave=True)
         for batch in progress:
             step += 1
+            global_step = epoch * len(dataloader) + step
             optimizer.zero_grad()
 
             joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = move_lingo_batch(batch, device)
@@ -149,10 +209,22 @@ def train_ddp(rank, world_size, cfg):
                 length=length, valid_mask=valid_mask, object_present=object_present,
             )
 
-            if step % 10 == 0:
+            if step % cfg.get("log_interval", 10) == 0:
                 print(f"Epoch: {epoch}, Step: {step} / {len(dataloader)}   Loss: {loss.item()}", flush=True)
-                if cfg.use_tensorboard and rank == 0:
-                    writer.add_scalar('Loss', loss.item(), epoch * len(dataloader) + step)
+                if rank == 0:
+                    log_payload = {
+                        "epoch": epoch,
+                        "step": step,
+                        "global_step": global_step,
+                        "train/loss": float(loss.item()),
+                        "train/lr": float(optimizer.param_groups[0]["lr"]),
+                    }
+                    write_jsonl(metrics_path, log_payload)
+                    if writer is not None:
+                        writer.add_scalar('Loss', loss.item(), global_step)
+                        writer.add_scalar('LR', optimizer.param_groups[0]["lr"], global_step)
+                    if wandb_run is not None:
+                        wandb_run.log(log_payload, step=global_step)
 
             loss.backward()
             optimizer.step()
@@ -168,8 +240,16 @@ def train_ddp(rank, world_size, cfg):
             val_loss = validate(model, trainer, val_dataloader, cfg, device, epoch=epoch, show_progress=(rank == 0))
             if rank == 0:
                 print(f"Epoch: {epoch}   Val Loss: {val_loss}", flush=True)
-                if cfg.use_tensorboard:
+                val_payload = {
+                    "epoch": epoch,
+                    "global_step": global_step,
+                    "val/loss": float(val_loss),
+                }
+                write_jsonl(metrics_path, val_payload)
+                if writer is not None:
                     writer.add_scalar('Val/Loss', val_loss, epoch)
+                if wandb_run is not None:
+                    wandb_run.log(val_payload, step=global_step)
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     ckpt_folder = os.path.join(cfg.exp_dir, 'checkpoints')
@@ -177,11 +257,21 @@ def train_ddp(rank, world_size, cfg):
                     best_path = os.path.join(ckpt_folder, 'best_model.pth')
                     torch.save(model.module.state_dict(), best_path)
                     print(f"Saved best model to {best_path} with val loss {best_val_loss}", flush=True)
+                    if wandb_run is not None:
+                        wandb_run.summary["best_val_loss"] = float(best_val_loss)
 
         torch.distributed.barrier()
 
         print('Clearing cache', flush=True)
         torch.cuda.empty_cache()
+
+    if writer is not None:
+        writer.close()
+    if wandb_run is not None:
+        wandb_run.finish()
+    sys.stdout = stdout_orig
+    sys.stderr = stderr_orig
+    rank_log_file.close()
 
 
 def get_mask(x_start, ind, p, fixed_frame=0, mask_y=True):
