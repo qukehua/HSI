@@ -75,7 +75,11 @@ def init_wandb(cfg, rank):
     }
     if cfg.get("wandb_entity", None) not in [None, "null", "None"]:
         wandb_kwargs["entity"] = cfg.wandb_entity
-    return wandb.init(**wandb_kwargs)
+    try:
+        return wandb.init(**wandb_kwargs)
+    except Exception as exc:
+        print(f"WandB initialization failed, continuing without WandB: {exc}", flush=True)
+        return None
 
 
 def get_split_subset(dataset, dataset_cfg, split_name):
