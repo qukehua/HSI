@@ -163,12 +163,13 @@ def train_ddp(rank, world_size, cfg):
     val_dataset = get_split_subset(synhsi_dataset, dataset_cfg, val_split) if cfg.get('use_validation', True) else None
 
     sampler = DistributedSampler(train_dataset)
+    pin_memory = cfg.num_workers > 0
     dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, drop_last=True, num_workers=cfg.num_workers,
-                            sampler=sampler, pin_memory=True)
+                            sampler=sampler, pin_memory=pin_memory)
     if val_dataset is not None:
         val_sampler = DistributedSampler(val_dataset, shuffle=False)
         val_dataloader = DataLoader(val_dataset, batch_size=cfg.val_batch_size, drop_last=True, num_workers=cfg.num_workers,
-                                    sampler=val_sampler, pin_memory=True)
+                                    sampler=val_sampler, pin_memory=pin_memory)
     else:
         val_dataloader = None
 

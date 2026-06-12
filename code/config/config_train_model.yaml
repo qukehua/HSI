@@ -33,7 +33,7 @@ exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 
 num_gpus: 7
-num_workers: 8
+num_workers: 0
 scene_type: occ_two
 max_window_size: 120
 motion_len: 100000
