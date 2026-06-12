@@ -51,7 +51,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Create scene-disjoint train/val/test splits for LINGO/HSI.")
     parser.add_argument("--dataset-dir", default="../dataset")
     parser.add_argument("--motion-dict", default="language_motion_dict/language_motion_dict__inter_and_loco__16.pkl")
-    parser.add_argument("--scheduler-motion-dict", default="language_motion_dict/scheduler_inter16.pkl")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
@@ -82,10 +81,7 @@ def main():
         "splits": {},
     }
 
-    for dict_name, rel_path in [
-        ("lingo", args.motion_dict),
-        ("scheduler", args.scheduler_motion_dict),
-    ]:
+    for dict_name, rel_path in [("lingo", args.motion_dict)]:
         motion_dict_path = dataset_dir / rel_path
         if not motion_dict_path.exists():
             print(f"Skip missing {motion_dict_path}")
@@ -97,8 +93,7 @@ def main():
 
         for split_name, scenes in scene_splits.items():
             indices = indices_for_scenes(start_idx, frame_scene_names, scenes)
-            file_prefix = split_name if dict_name == "lingo" else f"scheduler_{split_name}"
-            save_split(output_dir, file_prefix, indices, scenes)
+            save_split(output_dir, split_name, indices, scenes)
             scene_counts = Counter(frame_scene_names[int(start_idx[i])] for i in indices)
             summary["splits"][dict_name][split_name] = {
                 "num_indices": int(len(indices)),

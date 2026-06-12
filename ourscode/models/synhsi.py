@@ -291,46 +291,6 @@ class Sampler:
             img[:, :fixed_points.shape[1], :] = fixed_points
 
 
-class TimingModel(nn.Module):
-    def __init__(self, dim_input, dim_model, num_heads, dropout_p, num_layers, language_feature_dim):
-        super().__init__()
-        encoder_layer = nn.TransformerEncoderLayer(d_model=dim_model,
-                                                   nhead=num_heads,
-                                                   dim_feedforward=dim_model,
-                                                   dropout=dropout_p,
-                                                   activation="gelu")
-        self.dim_model = dim_model
-        self.positional_encoder = PositionalEncoding(
-            dim_model=dim_model, dropout_p=dropout_p, max_len=5000
-        )
-
-        self.transformer = nn.TransformerEncoder(encoder_layer,
-                                                 num_layers=num_layers
-                                                 )
-        self.embedding_input = nn.Linear(dim_input, dim_model)
-        self.out = nn.Linear(dim_model, 1)
-        self.sigmoid = nn.Sigmoid()
-
-        self.embed_timestep = TimestepEmbedder(self.dim_model, self.positional_encoder)
-
-        self.embedding_language = LanguageEncoder(dim_output=dim_model, dim_input=language_feature_dim)
-
-    def forward(self, x, text_emb, pi):
-        need_pi = torch.ones_like(pi, dtype=torch.bool, device=pi.device)
-        language_emb = self.embedding_language(text_emb, pi, need_pi)
-        language_emb = language_emb.permute(1, 0, 2)
-
-        x = x.permute(1, 0, 2)
-        x = self.embedding_input(x) * math.sqrt(self.dim_model)
-
-        x = torch.cat((language_emb, x), dim=0)
-        x = self.positional_encoder(x)
-        x = self.transformer(x)
-        output = self.out(x)[-1]
-
-        return output
-
-
 def temporal_upsample(x_anchor: torch.Tensor, target_len: int) -> torch.Tensor:
     """Linearly upsample low-frequency trajectory anchors to frame-level tracks."""
     if x_anchor.shape[1] == target_len:

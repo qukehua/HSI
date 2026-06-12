@@ -9,7 +9,6 @@ from omegaconf import DictConfig, OmegaConf
 from scipy.spatial.transform import Rotation as R
 from tqdm.auto import tqdm
 
-from models.synhsi import TimingModel
 from models.joints_to_smplx import joints_to_smpl
 from utils import *
 from constants import *
@@ -187,15 +186,7 @@ def load_sample_models(cfg, device):
     print('model_joints_to_smplx device: ', next(model_joints_to_smplx.parameters()).device)
     model_body = init_model(cfg.model.synhsi_body, device=device, eval=True)
 
-    if cfg.use_scheduler:
-        scheduler_model = TimingModel(**cfg.model.scheduler)
-        scheduler_model.load_state_dict(torch.load(cfg.scheduler_model_path, map_location=device))
-        scheduler_model.to(device)
-        scheduler_model.eval()
-    else:
-        scheduler_model = None
-
-    return model_joints_to_smplx, model_body, scheduler_model
+    return model_joints_to_smplx, model_body
 
 
 def get_sampler_for_scene(cfg, model_body, scene_name, sampler_cache):
@@ -210,7 +201,7 @@ def get_sampler_for_scene(cfg, model_body, scene_name, sampler_cache):
     return sampler_body
 
 
-def run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model, exp_dir=None, save_filename=None):
+def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save_filename=None):
     device = cfg.device
     cond = get_guidance(cfg, 0)
     input_data = load_pickle_compat(cfg.input_path)
@@ -294,14 +285,6 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model, e
                 else:
                     points_all.append(points.cpu().numpy()[:, :-cfg.auto_regre_num])
 
-            # scheduler
-            if cfg.use_scheduler and not cond['is_loco']:
-                points_loco = sampler_body.dataset.normalize_torch(transform_points(points, torch.inverse(mat)))
-                stop_pred = scheduler_model(points_loco, cond['text_emb'], pi).squeeze(1)
-                stop_pred = torch.sigmoid(stop_pred)
-                if stop_pred > cfg.scheduler_threshold:                
-                    break
-
             if cond['is_loco'] and seg_id != seg_num - 1:
                 curr_loc = points[0, -1, :3].cpu().numpy().copy()
                 curr_loc[1] = 0.0
@@ -335,7 +318,7 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model, e
     print(cfg.test_setting, cfg.repeat_time)
 
 
-def run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model):
+def run_mm_sampling(cfg, model_joints_to_smplx, model_body):
     input_pattern = os.path.join(cfg.mm_input_dir, cfg.mm_input_glob)
     input_paths = sorted(glob.glob(input_pattern))
     if len(input_paths) == 0:
@@ -374,7 +357,6 @@ def run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model):
                 cfg,
                 sampler_body,
                 model_joints_to_smplx,
-                scheduler_model,
                 exp_dir=str(case_dir),
                 save_filename=save_filename,
             )
@@ -383,17 +365,17 @@ def run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model):
 @hydra.main(version_base=None, config_path="config", config_name="config_sample")
 def sample(cfg: DictConfig) -> None:
     device = cfg.device
-    model_joints_to_smplx, model_body, scheduler_model = load_sample_models(cfg, device)
+    model_joints_to_smplx, model_body = load_sample_models(cfg, device)
     print(OmegaConf.to_yaml(cfg))
 
     if cfg.mm_sampling:
-        run_mm_sampling(cfg, model_joints_to_smplx, model_body, scheduler_model)
+        run_mm_sampling(cfg, model_joints_to_smplx, model_body)
         return
 
     cond = get_guidance(cfg, 0)
     sampler_cache = {}
     sampler_body = get_sampler_for_scene(cfg, model_body, cond['scene_name'], sampler_cache)
-    run_sample_once(cfg, sampler_body, model_joints_to_smplx, scheduler_model)
+    run_sample_once(cfg, sampler_body, model_joints_to_smplx)
 
 
 if __name__ == '__main__':

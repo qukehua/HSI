@@ -6,7 +6,6 @@ defaults:
   - model:
       - model_smplx
       - synhsi_body
-      - scheduler
   - sampler:
       - pelvis
 
@@ -15,9 +14,6 @@ device: cuda
 batch_size: 1
 interp_s: 3
 
-use_scheduler: true
-scheduler_model_path: /data3/user/qkh/HSI/ckpts/scheduler/scheduler.pth
-scheduler_threshold: 0.7
 locomotion_threshold: 1.0
 
 vis: true
