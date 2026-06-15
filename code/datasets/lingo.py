@@ -114,7 +114,7 @@ class LingoDataset(Dataset):
     def _load_scenes(self):
         scene_folder = self.scene_source_dir / ("Scene" if self.train else "Scene_vis")
         scene_file_list = sorted(os.listdir(scene_folder))
-        if not self.train and self.test_scene_name not in [None, "None", "none", "null"]:
+        if self.test_scene_name not in [None, "None", "none", "null"]:
             scene_file_list = [name for name in scene_file_list if name.split(".")[0] == self.test_scene_name]
 
         scene_occ = []
