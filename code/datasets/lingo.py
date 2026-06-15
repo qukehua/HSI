@@ -191,14 +191,20 @@ class LingoDataset(Dataset):
         ub = torch.all(voxel < self.scene_grid_torch[6:] - 0, dim=-1)
         in_bound = torch.logical_and(lb, ub)
         voxel[torch.logical_not(in_bound)] = 0
-        if self.scene_is_dataset:
-            voxel = torch.cat([self.batch_id, voxel], dim=1)
-        occ = self.scene_occ[scene_flag]
+        scene_flag = torch.as_tensor(scene_flag, device=self.device, dtype=torch.long).reshape(-1)
+        if scene_flag.numel() == 1 and batch_size > 1:
+            scene_flag = scene_flag.repeat(batch_size)
+        if scene_flag.numel() != batch_size:
+            raise ValueError(
+                f"scene_flag has {scene_flag.numel()} entries, but points batch size is {batch_size}."
+            )
 
-        if self.scene_is_dataset:
-            occ_for_points = occ[voxel[:, 0], voxel[:, 1], voxel[:, 2], voxel[:, 3]]
-        else:
-            occ_for_points = occ[0, voxel[:, 0], voxel[:, 1], voxel[:, 2]]
+        occ = self.scene_occ[scene_flag]
+        if occ.ndim == 5 and occ.shape[1] == 1:
+            occ = occ[:, 0]
+
+        batch_id = torch.arange(batch_size, device=self.device).repeat_interleave(seq_len)
+        occ_for_points = occ[batch_id, voxel[:, 0], voxel[:, 1], voxel[:, 2]]
         occ_for_points[torch.logical_not(in_bound)] = True
         return occ_for_points.reshape(batch_size, seq_len, -1)
 
