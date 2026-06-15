@@ -33,6 +33,7 @@ class LingoDataset(Dataset):
             use_pi=True,
             split=None,
             split_dir="splits",
+            scene_mode="auto",
             scene_source_dir=None,
             test_scene_name=None,
             **kwargs,
@@ -47,6 +48,8 @@ class LingoDataset(Dataset):
         self.use_pi = use_pi
         self.split = split
         self.split_dir = split_dir
+        self.scene_mode = scene_mode
+        self.scene_is_dataset = bool(train)
         self.test_scene_name = test_scene_name
         self.step = step
         self.batch_size = batch_size
@@ -112,7 +115,20 @@ class LingoDataset(Dataset):
             self._load_scenes()
 
     def _load_scenes(self):
-        scene_folder = self.scene_source_dir / ("Scene" if self.train else "Scene_vis")
+        scene_mode = str(self.scene_mode or "auto").lower()
+        if scene_mode in ("auto", "none", "null"):
+            self.scene_is_dataset = bool(self.train)
+        elif scene_mode in ("test", "scene", "dataset"):
+            self.scene_is_dataset = True
+        elif scene_mode in ("visualization", "visualisation", "vis", "scene_vis", "scenevis"):
+            self.scene_is_dataset = False
+        else:
+            raise ValueError(
+                f"Unknown scene_mode={self.scene_mode!r}. "
+                "Use auto, test/scene, or visualization/scene_vis."
+            )
+
+        scene_folder = self.scene_source_dir / ("Scene" if self.scene_is_dataset else "Scene_vis")
         scene_file_list = sorted(os.listdir(scene_folder))
         if self.test_scene_name not in [None, "None", "none", "null"]:
             scene_file_list = [name for name in scene_file_list if name.split(".")[0] == self.test_scene_name]
@@ -127,7 +143,7 @@ class LingoDataset(Dataset):
             raise RuntimeError(f"No scene files found in {scene_folder}.")
         self.scene_occ = torch.stack(scene_occ)
 
-        if self.train:
+        if self.scene_is_dataset:
             self.scene_grid_np = np.array([-3, 0, -4, 3, 2, 4, 300, 100, 400])
             self.scene_grid_torch = torch.tensor([-3, 0, -4, 3, 2, 4, 300, 100, 400]).to(self.device)
         else:
@@ -175,11 +191,11 @@ class LingoDataset(Dataset):
         ub = torch.all(voxel < self.scene_grid_torch[6:] - 0, dim=-1)
         in_bound = torch.logical_and(lb, ub)
         voxel[torch.logical_not(in_bound)] = 0
-        if self.train:
+        if self.scene_is_dataset:
             voxel = torch.cat([self.batch_id, voxel], dim=1)
         occ = self.scene_occ[scene_flag]
 
-        if self.train:
+        if self.scene_is_dataset:
             occ_for_points = occ[voxel[:, 0], voxel[:, 1], voxel[:, 2], voxel[:, 3]]
         else:
             occ_for_points = occ[0, voxel[:, 0], voxel[:, 1], voxel[:, 2]]

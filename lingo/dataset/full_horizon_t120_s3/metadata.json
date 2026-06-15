@@ -1,0 +1,20 @@
+{
+  "dataset_dir": "/share/qkh/dataset",
+  "num_samples": 19450,
+  "t_max": 120,
+  "step": 3,
+  "long_policy": "truncate",
+  "normalize": true,
+  "motion_shape": [
+    19450,
+    120,
+    84
+  ],
+  "num_joints": 28,
+  "length_min": 5,
+  "length_max": 120,
+  "length_mean": 40.03218508997429,
+  "truncated_count": 172,
+  "missing_text_feature_count": 0,
+  "split_mode": "scene"
+}

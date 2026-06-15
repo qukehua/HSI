@@ -10,6 +10,8 @@ defaults:
       - pelvis
 
 train: false
+# test/scene loads dataset/Scene; visualization/scene_vis loads dataset/Scene_vis.
+scene_mode: test
 device: cuda
 batch_size: 1
 interp_s: 3

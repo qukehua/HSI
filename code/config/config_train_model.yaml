@@ -10,6 +10,7 @@ defaults:
 
 exp_name: train5.28
 train: true
+scene_mode: auto
 load_state_dict: false
 batch_size: 8
 lr: 0.0001
