@@ -27,7 +27,7 @@ speed: 0.8
 
 test_setting: demo-21
 exp_dir: ${oc.env:ROOT_DIR}/results/outputs
-ckpt_path: ${oc.env:ROOT_DIR}/results/train5.28/checkpoints/train5.28_epoch280.pth
+ckpt_path: ${oc.env:ROOT_DIR}/results/train5.28/checkpoints/best_model.pth
 input_path: ${oc.env:ROOT_DIR}/results/inputs/demo-21.pkl
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 

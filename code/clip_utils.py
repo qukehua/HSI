@@ -1,7 +1,41 @@
-import torch
 import clip
-from tqdm.auto import tqdm
 import numpy as np
+import os
+import torch
+from pathlib import Path
+from tqdm.auto import tqdm
+
+
+CLIP_MODEL_NAME = "ViT-L/14@336px"
+CLIP_MODEL_FILE = "ViT-L-14-336px.pt"
+_CLIP_MODEL_CACHE = {}
+
+
+def _project_root():
+    return Path(os.environ.get("ROOT_DIR", Path(__file__).resolve().parents[1])).resolve()
+
+
+def _clip_model_path():
+    return Path(os.environ.get("CLIP_MODEL_PATH", _project_root() / "clip" / CLIP_MODEL_FILE)).resolve()
+
+
+def _load_clip_model(device):
+    cache_key = str(device)
+    if cache_key in _CLIP_MODEL_CACHE:
+        return _CLIP_MODEL_CACHE[cache_key]
+
+    model_path = _clip_model_path()
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"CLIP checkpoint not found: {model_path}. "
+            f"Upload {CLIP_MODEL_FILE} to {_project_root() / 'clip'} or set CLIP_MODEL_PATH."
+        )
+
+    print(f"Loading CLIP checkpoint from {model_path}", flush=True)
+    model, _ = clip.load(str(model_path), device=device)
+    model.eval()
+    _CLIP_MODEL_CACHE[cache_key] = model
+    return model
 
 
 def get_clip_features(raw_text: str):
@@ -10,8 +44,7 @@ def get_clip_features(raw_text: str):
     '''
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, _ = clip.load('ViT-L/14@336px', device=device)
-    model.eval()
+    model = _load_clip_model(device)
     text = clip.tokenize([raw_text]).to(device)
     with torch.no_grad():
         text_features = model.encode_text(text)

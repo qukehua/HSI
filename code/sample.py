@@ -310,7 +310,8 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
     for i in range(cfg.batch_size):
         keypoint_gene_torch = torch.from_numpy(points_all[i]).reshape(-1, cfg.dataset.nb_joints * 3).to(device)
         pose, transl, _, _ = joints_to_smpl(model_joints_to_smplx, keypoint_gene_torch, cfg.dataset.joints_ind, cfg.interp_s)
-        output_data = {'transl': transl, 'body_pose': pose[:, 3:], 'global_orient': pose[:, :3],
+        output_data = {'joints': points_all[i].astype(np.float32),
+                        'transl': transl, 'body_pose': pose[:, 3:], 'global_orient': pose[:, :3],
                         'scene_name': cond['scene_name'], 'input_pkl_path': cfg.input_path,
                         'test_setting': cfg.test_setting, 'repeat_time': cfg.repeat_time,
                         'mm_group_id': cfg.test_setting,

@@ -3,4 +3,4 @@ model_smplx:
   input_dim: ${times:${dataset.nb_joints},3}
   output_dim: 132
   hidden_dim: 128
-  ckpt: /data3/user/qkh/HSI/ckpts/joints2smplx/train_joint2smpl__input_84__hidden_128__all__last.pth
+  ckpt: ${oc.env:ROOT_DIR}/joints2smplx/train_joint2smpl__input_84__hidden_128__all__last.pth

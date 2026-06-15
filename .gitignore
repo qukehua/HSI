@@ -39,6 +39,8 @@ smpl_models/
 *.pkl
 
 # Model checkpoints and weights
+joints2smplx/
+clip/
 checkpoints/
 ckpts/
 *.pth
