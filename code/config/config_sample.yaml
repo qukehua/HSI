@@ -25,20 +25,21 @@ seg_len: 4 # episode
 
 speed: 0.8
 
+#visualization sampling
 test_setting: demo-21
 exp_dir: ${oc.env:ROOT_DIR}/results/outputs
 ckpt_path: ${oc.env:ROOT_DIR}/results/train5.28/checkpoints/best_model.pth
-input_path: ${oc.env:ROOT_DIR}/results/inputs/demo-21.pkl
+input_path: ${oc.env:ROOT_DIR}/results/inputs/scene21/action0.pkl
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 
 # Multi-modality evaluation sampling.
 # When enabled, sample_lingo.py reads all pkl files from mm_input_dir and
 # generates mm_num_repeats stochastic samples for each input.
 mm_sampling: True
-mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs
+mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs_test
 mm_input_glob: "*.pkl"
-mm_output_dir: ${exp_dir}/outputs
-mm_num_repeats: 30
+mm_output_dir: ${exp_dir}/results/outputs_test
+mm_num_repeats: 10
 mm_max_inputs: 0
 mm_skip_existing: true
 
