@@ -40,7 +40,7 @@ smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 mm_sampling: True
 mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs_test
 mm_input_glob: "*.pkl"
-mm_output_dir: ${exp_dir}/results/outputs_test
+mm_output_dir: ${exp_dir}/outputs_test
 mm_num_repeats: 10
 mm_max_inputs: 0
 mm_skip_existing: true
