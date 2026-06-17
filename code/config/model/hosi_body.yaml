@@ -17,6 +17,7 @@ hosi_body:
   object_motion_dim: 9
   trajectory_anchor_stride: 4
   num_scene_query_frames: 8
+  scene_query_coord_scale: 1.0
   phase_dim: 32
   contact_dim: 6
   language_feature_dim: 768

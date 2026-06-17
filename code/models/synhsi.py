@@ -450,11 +450,49 @@ class VectorConditionEncoder(nn.Module):
 
 
 class DynamicSceneQuery(nn.Module):
-    """MVP-compatible placeholder for trajectory-conditioned temporal scene tokens."""
-    def __init__(self, dim_model: int, num_query_frames: int = 8):
+    """Sample trajectory-conditioned scene features from the local occupancy crop."""
+    def __init__(
+            self,
+            dim_model: int,
+            num_query_frames: int = 8,
+            scene_channels: int = 0,
+            coord_scale: float = 1.0,
+    ):
         super().__init__()
         self.dim_model = dim_model
         self.num_query_frames = num_query_frames
+        self.scene_channels = int(scene_channels)
+        self.coord_scale = float(coord_scale)
+        input_dim = self.scene_channels * 2 + 7
+        self.query_mlp = nn.Sequential(
+            nn.Linear(input_dim, dim_model),
+            nn.SiLU(inplace=False),
+            nn.Linear(dim_model, dim_model),
+        )
+
+    def _sample_scene(self, scene_grid: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+        batch_size, num_tokens = points.shape[:2]
+        if scene_grid is None or scene_grid.ndim != 4 or self.scene_channels <= 0:
+            return points.new_zeros(batch_size, num_tokens, self.scene_channels)
+
+        scene_grid = scene_grid.to(device=points.device, dtype=points.dtype)
+        if scene_grid.shape[1] < self.scene_channels:
+            pad = scene_grid.new_zeros(
+                scene_grid.shape[0],
+                self.scene_channels - scene_grid.shape[1],
+                scene_grid.shape[2],
+                scene_grid.shape[3],
+            )
+            scene_grid = torch.cat([scene_grid, pad], dim=1)
+        elif scene_grid.shape[1] > self.scene_channels:
+            scene_grid = scene_grid[:, :self.scene_channels]
+
+        scale = max(self.coord_scale, 1e-6)
+        x_norm = (points[..., 0] / scale).clamp(-1.0, 1.0)
+        z_norm = (points[..., 2] / scale).clamp(-1.0, 1.0)
+        grid = torch.stack([z_norm, x_norm], dim=-1).reshape(batch_size, num_tokens, 1, 2)
+        sampled = F.grid_sample(scene_grid, grid, mode="bilinear", padding_mode="border", align_corners=True)
+        return sampled.squeeze(-1).permute(0, 2, 1)
 
     def forward(
             self,
@@ -463,14 +501,43 @@ class DynamicSceneQuery(nn.Module):
             object_traj_dense: Optional[torch.Tensor] = None,
             object_geometry: Optional[torch.Tensor] = None,
             query_frame_indices: Optional[torch.Tensor] = None,
+            object_present: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         batch_size = pelvis_traj_dense.shape[0]
         device = pelvis_traj_dense.device
+        dtype = pelvis_traj_dense.dtype
+        seq_len = pelvis_traj_dense.shape[1]
+
+        if scene_grid is None or self.scene_channels <= 0:
+            num_tokens = max(1, min(self.num_query_frames, seq_len)) if query_frame_indices is None else int(query_frame_indices.numel())
+            return torch.zeros(batch_size, num_tokens, self.dim_model, device=device, dtype=dtype)
+
         if query_frame_indices is None:
-            num_tokens = min(self.num_query_frames, pelvis_traj_dense.shape[1])
+            num_tokens = max(1, min(self.num_query_frames, seq_len))
+            query_frame_indices = torch.linspace(0, seq_len - 1, num_tokens, device=device).round().long()
         else:
+            query_frame_indices = query_frame_indices.to(device=device, dtype=torch.long)
             num_tokens = int(query_frame_indices.numel())
-        return torch.zeros(batch_size, num_tokens, self.dim_model, device=device)
+
+        pelvis_query = pelvis_traj_dense.index_select(1, query_frame_indices)
+        if object_traj_dense is None:
+            object_query = torch.zeros_like(pelvis_query)
+        else:
+            object_query = object_traj_dense.index_select(1, query_frame_indices).to(device=device, dtype=dtype)
+
+        object_mask = _batch_bool_mask(object_present, batch_size, device, default=False).to(dtype=dtype).view(batch_size, 1, 1)
+        object_query = object_query * object_mask
+
+        pelvis_scene = self._sample_scene(scene_grid, pelvis_query)
+        object_scene = self._sample_scene(scene_grid, object_query) * object_mask
+        time = query_frame_indices.to(dtype=dtype).view(1, num_tokens, 1) / max(seq_len - 1, 1)
+        time = time.repeat(batch_size, 1, 1)
+
+        query_feat = torch.cat(
+            [pelvis_scene, object_scene, pelvis_query, object_query, time],
+            dim=-1,
+        )
+        return self.query_mlp(query_feat)
 
 
 class GlobalBranch(nn.Module):
@@ -518,7 +585,8 @@ class LocalBranch(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         traj_feat = self.traj_proj(torch.cat([pelvis_traj_dense, object_traj_dense], dim=-1))
         phase_feat = self.phase_proj(phase_latent)
-        scene_feat = self.scene_proj(temporal_scene_tokens.mean(dim=1, keepdim=True))
+        scene_tokens = temporal_upsample(temporal_scene_tokens, frame_tokens.shape[1])
+        scene_feat = self.scene_proj(scene_tokens)
         frame_tokens = self.fuse(frame_tokens + traj_feat + phase_feat + scene_feat)
         object_motion = self.object_head(frame_tokens)
         object_motion = object_motion * object_present.to(object_motion.dtype).view(-1, 1, 1)
@@ -567,6 +635,7 @@ class Unet(nn.Module):
             object_point_dim=3,
             trajectory_anchor_stride=4,
             num_scene_query_frames=8,
+            scene_query_coord_scale=1.0,
             phase_dim=32,
             contact_dim=6,
             return_full_state=False,
@@ -585,6 +654,7 @@ class Unet(nn.Module):
         self.object_motion_dim = object_motion_dim
         self.return_full_state = return_full_state
         self.scene_type = scene_type
+        vit_channels = 0
 
         if self.scene_type == 'plane':
             vit_channels = 1
@@ -647,6 +717,8 @@ class Unet(nn.Module):
         self.dynamic_scene_query = DynamicSceneQuery(
             dim_model=dim_model,
             num_query_frames=num_scene_query_frames,
+            scene_channels=vit_channels if self.load_scene else 0,
+            coord_scale=scene_query_coord_scale,
         )
         self.local_branch = LocalBranch(
             dim_model=dim_model,
@@ -761,6 +833,7 @@ class Unet(nn.Module):
             pelvis_traj_dense=pelvis_dense,
             object_traj_dense=object_dense,
             object_geometry=object_points,
+            object_present=object_present,
         )
         local_out = self.local_branch(
             frame_tokens=frame_tokens,

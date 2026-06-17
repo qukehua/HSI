@@ -1,6 +1,6 @@
 import torch
 
-from models.synhsi import Unet, end_distribution_to_valid_mask, temporal_upsample
+from models.synhsi import DynamicSceneQuery, Unet, end_distribution_to_valid_mask, temporal_upsample
 
 
 def make_inputs(batch_size=2, frames=16, motion_dim=66):
@@ -76,3 +76,22 @@ def test_mask_and_upsample_utilities():
     anchors = torch.tensor([[[0.0], [2.0]]])
     dense = temporal_upsample(anchors, 5)
     assert torch.allclose(dense.squeeze(-1), torch.tensor([[0.0, 0.5, 1.0, 1.5, 2.0]]))
+
+
+def test_dynamic_scene_query_uses_scene_and_trajectory():
+    torch.manual_seed(0)
+    query = DynamicSceneQuery(dim_model=16, num_query_frames=3, scene_channels=2, coord_scale=1.0)
+    scene = torch.zeros(1, 2, 4, 4)
+    scene[:, 0] = torch.linspace(0.0, 1.0, 4).view(1, 1, 4, 1)
+    scene[:, 1] = torch.linspace(0.0, 1.0, 4).view(1, 1, 1, 4)
+
+    pelvis_a = torch.zeros(1, 5, 3)
+    pelvis_b = pelvis_a.clone()
+    pelvis_b[..., 0] = 1.0
+    pelvis_b[..., 2] = 1.0
+
+    tokens_a = query(scene, pelvis_a, object_present=torch.zeros(1, dtype=torch.bool))
+    tokens_b = query(scene, pelvis_b, object_present=torch.zeros(1, dtype=torch.bool))
+
+    assert tokens_a.shape == (1, 3, 16)
+    assert not torch.allclose(tokens_a, tokens_b)
