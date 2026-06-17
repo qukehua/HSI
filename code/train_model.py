@@ -339,14 +339,17 @@ def train_ddp(rank, world_size, cfg):
                     "global_step": global_step,
                 }
                 val_payload.update(loss_payload("val", val_losses))
-                val_payload.update(loss_payload("eval", val_losses))
                 write_jsonl(metrics_path, val_payload)
                 if writer is not None:
                     writer.add_scalar('Val/Loss', val_loss, epoch)
                     log_loss_scalars(writer, "val", val_losses, epoch)
-                    log_loss_scalars(writer, "eval", val_losses, epoch)
                 if wandb_run is not None:
-                    wandb_run.log(val_payload, step=global_step)
+                    eval_payload = {
+                        "epoch": epoch,
+                        "global_step": global_step,
+                    }
+                    eval_payload.update(loss_payload("eval", val_losses))
+                    wandb_run.log(eval_payload, step=global_step)
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     ckpt_folder = os.path.join(cfg.exp_dir, 'checkpoints')
