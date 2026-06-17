@@ -84,6 +84,7 @@ class Sampler:
             object_present=None,
             noise=None,
             loss_type='huber',
+            return_loss_dict=False,
     ):
         if noise is None:
             noise = torch.randn_like(x_start)
@@ -167,13 +168,28 @@ class Sampler:
         mask_inv = torch.logical_not(loss_mask)
 
         if loss_type == 'l1':
-            loss = F.l1_loss(noise[mask_inv], predicted_noise[mask_inv])
+            denoise_loss = F.l1_loss(noise[mask_inv], predicted_noise[mask_inv])
         elif loss_type == 'l2':
-            loss = F.mse_loss(noise[mask_inv], predicted_noise[mask_inv])
+            denoise_loss = F.mse_loss(noise[mask_inv], predicted_noise[mask_inv])
         elif loss_type == "huber":
-            loss = F.smooth_l1_loss(noise[mask_inv], predicted_noise[mask_inv])
+            denoise_loss = F.smooth_l1_loss(noise[mask_inv], predicted_noise[mask_inv])
         else:
             raise NotImplementedError()
+
+        zero_loss = denoise_loss.new_zeros(())
+        loss_terms = {
+            "denoise": denoise_loss,
+            "aux_total": zero_loss,
+            "pelvis_traj": zero_loss,
+            "duration": zero_loss,
+            "valid_mask": zero_loss,
+            "smoothness": zero_loss,
+            "pelvis_traj_weighted": zero_loss,
+            "duration_weighted": zero_loss,
+            "valid_mask_weighted": zero_loss,
+            "smoothness_weighted": zero_loss,
+        }
+        loss = denoise_loss
 
         if self.use_aux_losses:
             valid_frame = valid_mask.to(dtype=x_start.dtype)
@@ -198,14 +214,34 @@ class Sampler:
             else:
                 smooth_loss = torch.zeros((), device=x_start.device)
 
-            loss = (
-                loss
-                + self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
-                + self.aux_loss_weights.get('duration', 0.2) * duration_loss
-                + self.aux_loss_weights.get('valid_mask', 0.1) * valid_loss
-                + self.aux_loss_weights.get('smoothness', 0.05) * smooth_loss
+            pelvis_weighted = self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
+            duration_weighted = self.aux_loss_weights.get('duration', 0.2) * duration_loss
+            valid_weighted = self.aux_loss_weights.get('valid_mask', 0.1) * valid_loss
+            smooth_weighted = self.aux_loss_weights.get('smoothness', 0.05) * smooth_loss
+            aux_total = (
+                pelvis_weighted
+                + duration_weighted
+                + valid_weighted
+                + smooth_weighted
+            )
+            loss = loss + aux_total
+            loss_terms.update(
+                {
+                    "aux_total": aux_total,
+                    "pelvis_traj": pelvis_loss,
+                    "duration": duration_loss,
+                    "valid_mask": valid_loss,
+                    "smoothness": smooth_loss,
+                    "pelvis_traj_weighted": pelvis_weighted,
+                    "duration_weighted": duration_weighted,
+                    "valid_mask_weighted": valid_weighted,
+                    "smoothness_weighted": smooth_weighted,
+                }
             )
 
+        if return_loss_dict:
+            loss_terms["total"] = loss
+            return loss_terms
         return loss
 
     @torch.no_grad()

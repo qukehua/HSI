@@ -57,6 +57,63 @@ def write_jsonl(path, payload):
         f.write(json.dumps(payload) + "\n")
 
 
+LOSS_LOG_ORDER = (
+    "total",
+    "denoise",
+    "aux_total",
+    "pelvis_traj_weighted",
+    "duration_weighted",
+    "valid_mask_weighted",
+    "smoothness_weighted",
+    "pelvis_traj",
+    "duration",
+    "valid_mask",
+    "smoothness",
+)
+
+
+def update_loss_totals(totals, loss_dict, batch_size):
+    for key, value in loss_dict.items():
+        if key not in totals:
+            totals[key] = torch.zeros(1, device=value.device)
+        totals[key] += value.detach().reshape(1) * batch_size
+
+
+def average_loss_totals(totals, total_count):
+    return {
+        key: (value / total_count.clamp_min(1)).item()
+        for key, value in totals.items()
+    }
+
+
+def format_loss_parts(loss_values):
+    parts = []
+    for key in LOSS_LOG_ORDER:
+        if key in loss_values:
+            parts.append(f"{key}={loss_values[key]:.6f}")
+    return " ".join(parts)
+
+
+def loss_payload(prefix, loss_values):
+    payload = {}
+    for key in LOSS_LOG_ORDER:
+        if key in loss_values:
+            payload[f"{prefix}/loss_{key}"] = float(loss_values[key])
+    if "total" in loss_values:
+        payload[f"{prefix}/loss"] = float(loss_values["total"])
+    return payload
+
+
+def log_loss_scalars(writer, prefix, loss_values, step):
+    if writer is None:
+        return
+    for key in LOSS_LOG_ORDER:
+        if key in loss_values:
+            writer.add_scalar(f"{prefix}/loss_{key}", loss_values[key], step)
+    if "total" in loss_values:
+        writer.add_scalar(f"{prefix}/loss", loss_values["total"], step)
+
+
 def init_wandb(cfg, rank):
     if rank != 0 or not cfg.get("use_wandb", False):
         return None
@@ -104,7 +161,7 @@ def move_lingo_batch(batch, device):
 @torch.no_grad()
 def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=False):
     model.eval()
-    total_loss = torch.zeros(1, device=device)
+    total_losses = {}
     total_count = torch.zeros(1, device=device)
 
     progress = tqdm(dataloader, desc=f"Val {epoch}", disable=not show_progress, leave=False)
@@ -118,15 +175,20 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
             text_clip_embedding, pelvis_goal, hand_goal,
             is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
             length=length, valid_mask=valid_mask, object_present=object_present,
+            return_loss_dict=True,
         )
-        total_loss += loss.detach() * batch_size
+        update_loss_totals(total_losses, loss, batch_size)
         total_count += batch_size
-        progress.set_postfix(loss=f"{loss.item():.4f}")
+        progress.set_postfix(
+            loss=f"{loss['total'].item():.4f}",
+            denoise=f"{loss['denoise'].item():.4f}",
+        )
 
-    torch.distributed.all_reduce(total_loss, op=torch.distributed.ReduceOp.SUM)
+    for key in sorted(total_losses):
+        torch.distributed.all_reduce(total_losses[key], op=torch.distributed.ReduceOp.SUM)
     torch.distributed.all_reduce(total_count, op=torch.distributed.ReduceOp.SUM)
     model.train()
-    return (total_loss / total_count.clamp_min(1)).item()
+    return average_loss_totals(total_losses, total_count)
 
 
 @hydra.main(version_base=None, config_path="config", config_name="config_train_model")
@@ -207,33 +269,44 @@ def train_ddp(rank, world_size, cfg):
             with torch.no_grad():
                 mask, _, _ = get_mask(joints, -1, p=1., fixed_frame=cfg.auto_regre_num)
 
-            loss = trainer.p_losses(
+            loss_dict = trainer.p_losses(
                 joints, mat, scene_flag, mask, t,
                 text_clip_embedding, pelvis_goal, hand_goal,
                 is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
                 length=length, valid_mask=valid_mask, object_present=object_present,
+                return_loss_dict=True,
             )
+            loss = loss_dict["total"]
 
             if step % cfg.get("log_interval", 10) == 0:
-                print(f"Epoch: {epoch}, Step: {step} / {len(dataloader)}   Loss: {loss.item()}", flush=True)
+                train_losses = {key: value.detach().item() for key, value in loss_dict.items()}
+                print(
+                    f"Epoch: {epoch}, Step: {step} / {len(dataloader)}   "
+                    f"{format_loss_parts(train_losses)}",
+                    flush=True,
+                )
                 if rank == 0:
                     log_payload = {
                         "epoch": epoch,
                         "step": step,
                         "global_step": global_step,
-                        "train/loss": float(loss.item()),
                         "train/lr": float(optimizer.param_groups[0]["lr"]),
                     }
+                    log_payload.update(loss_payload("train", train_losses))
                     write_jsonl(metrics_path, log_payload)
                     if writer is not None:
                         writer.add_scalar('Loss', loss.item(), global_step)
                         writer.add_scalar('LR', optimizer.param_groups[0]["lr"], global_step)
+                        log_loss_scalars(writer, "train", train_losses, global_step)
                     if wandb_run is not None:
                         wandb_run.log(log_payload, step=global_step)
 
             loss.backward()
             optimizer.step()
-            progress.set_postfix(loss=f"{loss.item():.4f}")
+            progress.set_postfix(
+                loss=f"{loss.item():.4f}",
+                denoise=f"{loss_dict['denoise'].item():.4f}",
+            )
 
         if rank == 0 and epoch % cfg.ckpt_interval == 0:
             print(f'Saving checkpoint', flush=True)
@@ -242,17 +315,21 @@ def train_ddp(rank, world_size, cfg):
             torch.save(model.module.state_dict(), os.path.join(ckpt_folder, f"{cfg.exp_name}_epoch{epoch:03d}.pth"))
 
         if val_dataloader is not None and epoch % cfg.val_interval == 0:
-            val_loss = validate(model, trainer, val_dataloader, cfg, device, epoch=epoch, show_progress=(rank == 0))
+            val_losses = validate(model, trainer, val_dataloader, cfg, device, epoch=epoch, show_progress=(rank == 0))
+            val_loss = val_losses["total"]
             if rank == 0:
-                print(f"Epoch: {epoch}   Val Loss: {val_loss}", flush=True)
+                print(f"Epoch: {epoch}   Val {format_loss_parts(val_losses)}", flush=True)
                 val_payload = {
                     "epoch": epoch,
                     "global_step": global_step,
-                    "val/loss": float(val_loss),
                 }
+                val_payload.update(loss_payload("val", val_losses))
+                val_payload.update(loss_payload("eval", val_losses))
                 write_jsonl(metrics_path, val_payload)
                 if writer is not None:
                     writer.add_scalar('Val/Loss', val_loss, epoch)
+                    log_loss_scalars(writer, "val", val_losses, epoch)
+                    log_loss_scalars(writer, "eval", val_losses, epoch)
                 if wandb_run is not None:
                     wandb_run.log(val_payload, step=global_step)
                 if val_loss < best_val_loss:
