@@ -44,7 +44,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Export sample.py input pkl files from a full-horizon dataset split."
     )
-    parser.add_argument("--dataset-dir", default="../dataset/full_horizon_t120_s3")
+    parser.add_argument("--dataset-dir", default="/share/qkh/dataset/lingo/full_horizon_t120_s3")
     parser.add_argument("--split", default="test", choices=("train", "val", "test"))
     parser.add_argument("--split-dir", default="splits")
     parser.add_argument("--output-dir", default="../results/inputs_test")

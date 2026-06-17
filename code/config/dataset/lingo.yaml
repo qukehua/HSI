@@ -1,5 +1,5 @@
-folder: ${oc.env:ROOT_DIR}/dataset/full_horizon_t120_s3
-scene_source_dir: ${oc.env:ROOT_DIR}/dataset
+folder: /share/qkh/dataset/lingo/full_horizon_t120_s3
+scene_source_dir: /share/qkh/dataset/lingo
 device: ${device}
 batch_size: ${batch_size}
 step: 3

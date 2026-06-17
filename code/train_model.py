@@ -156,6 +156,7 @@ def build_lr_scheduler(optimizer, cfg):
     return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
 
 
+def move_lingo_batch(batch, device):
     joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = batch
     return joints.to(device), \
            mat.to(device), scene_flag.to(device), \

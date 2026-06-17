@@ -8,7 +8,7 @@ defaults:
       - pelvis
   - _self_
 
-exp_name: train5.28
+exp_name: train6.17
 train: true
 scene_mode: auto
 load_state_dict: false

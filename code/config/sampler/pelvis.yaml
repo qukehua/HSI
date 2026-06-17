@@ -13,7 +13,7 @@ pelvis:
   beta_end: 0.02
   motion_len: ${motion_len}
   scene_type: ${scene_type}
-  use_aux_losses: true
+  use_aux_losses: false
   aux_loss_weights:
     pelvis_traj: 0.5
     duration: 0.2
