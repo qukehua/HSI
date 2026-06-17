@@ -6,6 +6,7 @@ import json
 import math
 import os
 import pickle as pkl
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -775,6 +776,77 @@ def interactive_metrics(
     return metrics
 
 
+def sample_pair_id(sample: MotionSample) -> Optional[str]:
+    fields = [sample.condition_id, sample.name, sample.source]
+    patterns = (
+        r"idx[-_](\d+)",
+        r"gt_full_(\d+)",
+        r"source[_-]?index[-_=](\d+)",
+    )
+    for field in fields:
+        if field is None:
+            continue
+        text = str(field)
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1)
+    return None
+
+
+def align_motion_to_reference(generated: np.ndarray, reference: np.ndarray, mode: str) -> Tuple[np.ndarray, np.ndarray]:
+    generated = np.asarray(generated, dtype=np.float32)
+    reference = np.asarray(reference, dtype=np.float32)
+    joint_count = min(generated.shape[1], reference.shape[1])
+    generated = generated[:, :joint_count]
+    reference = reference[:, :joint_count]
+
+    if mode == "resample":
+        generated = resample_motion(generated, reference.shape[0])
+    elif mode == "min":
+        length = min(generated.shape[0], reference.shape[0])
+        generated = generated[:length]
+        reference = reference[:length]
+    else:
+        raise ValueError(f"Unknown mpjpe_frame_alignment={mode!r}. Use resample or min.")
+    return generated, reference
+
+
+def mpjpe_for_pair(generated: np.ndarray, reference: np.ndarray, args: argparse.Namespace) -> float:
+    generated, reference = align_motion_to_reference(generated, reference, args.mpjpe_frame_alignment)
+    dist = np.linalg.norm(generated - reference, axis=-1)
+    return float(dist.mean())
+
+
+def paired_metrics(
+    generated: Sequence[MotionSample],
+    reference: Optional[Sequence[MotionSample]],
+    args: argparse.Namespace,
+) -> Dict[str, float]:
+    if not reference:
+        return {}
+
+    reference_by_id = {}
+    for sample in reference:
+        key = sample_pair_id(sample)
+        if key is not None and sample.joints is not None:
+            reference_by_id[key] = sample
+
+    values = []
+    for sample in generated:
+        if sample.joints is None:
+            continue
+        key = sample_pair_id(sample)
+        ref = reference_by_id.get(key)
+        if ref is None or ref.joints is None:
+            continue
+        values.append(mpjpe_for_pair(sample.joints, ref.joints, args))
+
+    if not values:
+        return {}
+    return {"mpjpe": float(np.mean(values))}
+
+
 def load_scene_occ(path: Optional[str], scene_name: Optional[str]) -> Optional[np.ndarray]:
     if path is None:
         return None
@@ -1075,7 +1147,7 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--metrics",
         default=config_default(config, "metrics", "all"),
-        choices=("all", "interactive", "locomotion", "reaching"),
+        choices=("all", "interactive", "locomotion", "reaching", "paired"),
         help="Metric group to run.",
     )
     parser.add_argument("--output", default=config_default(config, "output", None), help="Optional JSON output path.")
@@ -1086,6 +1158,12 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument("--diversity-pairs", type=int, default=config_default(config, "diversity_pairs", 200))
     parser.add_argument("--multimodality-pairs", type=int, default=config_default(config, "multimodality_pairs", 100))
     parser.add_argument("--precision-k", type=int, default=config_default(config, "precision_k", 3))
+    parser.add_argument(
+        "--mpjpe-frame-alignment",
+        choices=("resample", "min"),
+        default=config_default(config, "mpjpe_frame_alignment", "resample"),
+        help="How to align generated/reference frame counts before MPJPE.",
+    )
 
     parser.add_argument("--scene-occ", default=config_default(config, "scene_occ", None), help="Scene occupancy .npy/.npz or a directory of scene files.")
     parser.add_argument("--scene-grid", nargs=9, type=float, default=config_default(config, "scene_grid", DEFAULT_SCENE_GRID))
@@ -1148,6 +1226,12 @@ def main() -> None:
         except Exception as exc:
             warnings.warn(f"Interactive metrics skipped: {exc}")
             results["interactive"] = {}
+    if args.metrics in ("all", "paired"):
+        try:
+            results["paired"] = paired_metrics(generated, reference, args)
+        except Exception as exc:
+            warnings.warn(f"Paired metrics skipped: {exc}")
+            results["paired"] = {}
     if args.metrics in ("all", "locomotion"):
         try:
             results["locomotion"] = locomotion_metrics(generated, args)

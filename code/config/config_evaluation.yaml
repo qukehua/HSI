@@ -48,7 +48,7 @@ reference_need_pelvis_dir: null
 reference_need_hand_goal: null
 reference_need_pi: null
 
-# all, interactive, locomotion, or reaching.
+# all, interactive, paired, locomotion, or reaching.
 metrics: all
 
 # Optional JSON result file.
@@ -67,6 +67,10 @@ feature_dim: 512
 diversity_pairs: 200
 multimodality_pairs: 100
 precision_k: 3
+
+# MPJPE requires generated samples and GT references to share an id such as
+# idx-123 in mm_group_id/test_setting/input_pkl_path.
+mpjpe_frame_alignment: resample
 
 # Scene penetration metrics.
 # Use dataset/Scene_vis with the default eval grid, or dataset/Scene with:
