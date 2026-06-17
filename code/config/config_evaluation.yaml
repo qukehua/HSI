@@ -15,10 +15,27 @@ reference: []
 # language_motion_dict start_idx/end_idx, so you do not need to create
 # reference_interactive.npz manually.
 reference_dataset: null
+
+# Preferred when generated outputs were sampled from full_horizon_t120_s3.
+# This reads human_motion.npy directly, denormalizes it, and transforms local
+# joints back to global coordinates with mat.npy.
+reference_full_horizon_dataset: null
+reference_full_horizon_motion_file: human_motion.npy
+reference_full_horizon_length_file: length.npy
+reference_full_horizon_mat_file: mat.npy
+reference_full_horizon_text_file: text.pkl
+reference_full_horizon_norm_file: norm_inter_and_loco__16frames.npy
+reference_full_horizon_norm_dataset: null
+
 reference_motion_dict: language_motion_dict/language_motion_dict__inter_and_loco__16.pkl
 reference_joints_file: human_joints_aligned.npy
 reference_split: null
+# If the split comes from full_horizon_t120_s3 but reference_dataset is the raw
+# dataset, set reference_split_dataset to the full-horizon folder. The evaluator
+# will use source_index.npy there to map split indices back to language_motion_dict.
+reference_split_dataset: null
 reference_split_dir: splits
+reference_split_source_index: null
 reference_max_samples: 5000
 reference_sample_seed: null
 reference_step: 3
