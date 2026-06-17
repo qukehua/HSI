@@ -4,7 +4,7 @@
 
 # Files, directories, or globs produced by sample_lingo.py or your own sampler.
 # Required. Fill this before running without --generated.
-generated: [/share/qkh/HSI/results/outputs_test/**/*.pkl]
+generated: [/share/qkh/HSI/results/outputs/outputs_test/**/*.pkl]
 
 # GT/reference motions or features for FID, Precision, Recall, and F1.
 # Leave empty when you only need diversity, locomotion, or reaching metrics.
@@ -19,7 +19,7 @@ reference_dataset: null
 # Preferred when generated outputs were sampled from full_horizon_t120_s3.
 # This reads human_motion.npy directly, denormalizes it, and transforms local
 # joints back to global coordinates with mat.npy.
-reference_full_horizon_dataset: /share/qkh/HSI/dataset/full_horizon_t120_s3
+reference_full_horizon_dataset: /share/qkh/dataset/lingo/full_horizon_t120_s3
 reference_full_horizon_motion_file: human_motion.npy
 reference_full_horizon_length_file: length.npy
 reference_full_horizon_mat_file: mat.npy
@@ -71,7 +71,7 @@ precision_k: 3
 # Scene penetration metrics.
 # Use dataset/Scene_vis with the default eval grid, or dataset/Scene with:
 # scene_grid: [-3, 0, -4, 3, 2, 4, 300, 100, 400]
-scene_occ: /share/qkh/HSI/dataset/Scene
+scene_occ: /share/qkh/dataset/lingo/Scene
 scene_grid: [-4, 0, -6, 4, 2, 6, 400, 100, 600]
 body_points: auto
 out_of_bounds_occupied: true
