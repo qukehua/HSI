@@ -26,7 +26,9 @@ temp/
 # Datasets and large binary assets
 dataset_full
 dataset_window
+/dataset
 /dataset/
+lingo/dataset/
 smpl_models/
 *.pdf
 *.zip
