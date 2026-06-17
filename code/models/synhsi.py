@@ -26,6 +26,10 @@ class Sampler:
             'valid_mask': 0.1,
             'smoothness': 0.05,
         })
+        self.beta_schedule = kwargs.get('beta_schedule', 'linear')
+        self.beta_start = kwargs.get('beta_start', 0.0001)
+        self.beta_end = kwargs.get('beta_end', 0.02)
+        self.beta_schedule_s = kwargs.get('beta_schedule_s', 0.008)
         self.get_scheduler()
 
     def set_dataset_and_model(self, dataset, model):
@@ -37,7 +41,13 @@ class Sampler:
         self.occ_idx = torch.arange(0, nb_voxels[1], 1).to(self.device)
 
     def get_scheduler(self):
-        betas = linear_beta_schedule(timesteps=self.timesteps)
+        betas = get_beta_schedule(
+            self.beta_schedule,
+            self.timesteps,
+            beta_start=self.beta_start,
+            beta_end=self.beta_end,
+            cosine_s=self.beta_schedule_s,
+        )
 
         # define alphas
         alphas = 1. - betas

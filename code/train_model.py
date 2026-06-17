@@ -148,7 +148,14 @@ def get_split_subset(dataset, dataset_cfg, split_name):
     return Subset(dataset, split_idx)
 
 
-def move_lingo_batch(batch, device):
+def build_lr_scheduler(optimizer, cfg):
+    if not cfg.get("use_lr_decay", False):
+        return None
+    step_size = int(cfg.get("lr_decay_step_size", 50))
+    gamma = float(cfg.get("lr_decay_gamma", 0.95))
+    return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+
+
     joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = batch
     return joints.to(device), \
            mat.to(device), scene_flag.to(device), \
@@ -239,6 +246,13 @@ def train_ddp(rank, world_size, cfg):
     trainer.set_dataset_and_model(synhsi_dataset, model)
 
     optimizer = Adam(model.parameters(), lr=cfg.lr)
+    lr_scheduler = build_lr_scheduler(optimizer, cfg)
+    if rank == 0 and lr_scheduler is not None:
+        print(
+            f"LR decay enabled: step_size={lr_scheduler.step_size}, "
+            f"gamma={lr_scheduler.gamma}",
+            flush=True,
+        )
 
     if cfg.use_tensorboard and rank == 0:
         writer = SummaryWriter(log_dir=os.path.join(cfg.exp_dir, 'tensorboard_logs'))
@@ -341,6 +355,16 @@ def train_ddp(rank, world_size, cfg):
                     print(f"Saved best model to {best_path} with val loss {best_val_loss}", flush=True)
                     if wandb_run is not None:
                         wandb_run.summary["best_val_loss"] = float(best_val_loss)
+
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+            if rank == 0:
+                current_lr = optimizer.param_groups[0]["lr"]
+                print(f"Epoch: {epoch}   LR updated to {current_lr:.8f}", flush=True)
+                if writer is not None:
+                    writer.add_scalar('LR/epoch', current_lr, epoch)
+                if wandb_run is not None:
+                    wandb_run.log({"train/lr_epoch": float(current_lr)}, step=global_step)
 
         torch.distributed.barrier()
 

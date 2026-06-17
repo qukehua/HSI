@@ -1,3 +1,4 @@
+import math
 import torch
 import hydra
 import numpy as np
@@ -214,10 +215,34 @@ def extract(a, t, x_shape):
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
 
-def linear_beta_schedule(timesteps):
-    beta_start = 0.0001
-    beta_end = 0.02
+def linear_beta_schedule(timesteps, beta_start=0.0001, beta_end=0.02):
     return torch.linspace(beta_start, beta_end, timesteps)
+
+
+def cosine_beta_schedule(timesteps, s=0.008):
+    steps = timesteps + 1
+    x = torch.linspace(0, timesteps, steps)
+    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
+    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+    return torch.clip(betas, 0.0001, 0.9999)
+
+
+def get_beta_schedule(
+    schedule,
+    timesteps,
+    beta_start=0.0001,
+    beta_end=0.02,
+    cosine_s=0.008,
+):
+    schedule = str(schedule or "linear").lower()
+    if schedule in ("linear", "lin"):
+        return linear_beta_schedule(timesteps, beta_start=beta_start, beta_end=beta_end)
+    if schedule in ("cosine", "cos"):
+        return cosine_beta_schedule(timesteps, s=cosine_s)
+    raise ValueError(
+        f"Unknown beta_schedule={schedule!r}. Use 'linear' or 'cosine'."
+    )
 
 
 def init_model(model_cfg, device, eval, load_state_dict=False, need_ddp=True):

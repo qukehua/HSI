@@ -7,11 +7,15 @@ pelvis:
   channel: ${times:${dataset.nb_joints},3}
   auto_regre_num: ${auto_regre_num}
   timesteps: 100
+  beta_schedule: cosine
+  beta_schedule_s: 0.008
+  beta_start: 0.0001
+  beta_end: 0.02
   motion_len: ${motion_len}
   scene_type: ${scene_type}
   use_aux_losses: true
   aux_loss_weights:
     pelvis_traj: 0.5
     duration: 0.2
-    valid_mask: 0.1
-    smoothness: 0.05
+    valid_mask: 0
+    smoothness: 0

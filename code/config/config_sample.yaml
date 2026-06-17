@@ -29,7 +29,7 @@ speed: 0.8
 
 #visualization sampling
 test_setting: demo-21
-exp_dir: ${oc.env:ROOT_DIR}/results/outputs
+exp_dir: ${oc.env:ROOT_DIR}/results/
 ckpt_path: ${oc.env:ROOT_DIR}/results/train5.28/checkpoints/best_model.pth
 input_path: ${oc.env:ROOT_DIR}/results/inputs/scene21/action0.pkl
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
