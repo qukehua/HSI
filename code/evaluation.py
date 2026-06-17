@@ -15,6 +15,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - tqdm is listed in requirements.
+    tqdm = None
+
+try:
     import yaml
 except Exception:  # pragma: no cover - PyYAML is listed in requirements.
     yaml = None
@@ -46,6 +51,25 @@ DEFAULT_SCENE_GRID = (-4.0, 0.0, -6.0, 4.0, 2.0, 6.0, 400.0, 100.0, 600.0)
 DEFAULT_FOOT_JOINTS = (7, 8, 10, 11)
 DEFAULT_HAND_JOINTS = (20, 21, 25, 26, 27, 40, 49)
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "config_evaluation.yaml"
+
+_SCENE_PATH_CACHE: Dict[Tuple[str, Optional[str]], Optional[Path]] = {}
+_SCENE_OCC_CACHE: Dict[str, np.ndarray] = {}
+_DISTANCE_FIELD_CACHE: Dict[Tuple[str, Tuple[float, ...]], np.ndarray] = {}
+
+
+def progress_iter(iterable, desc: str, enabled: bool = True, total: Optional[int] = None, leave: bool = False):
+    if tqdm is None or not enabled:
+        return iterable
+    return tqdm(iterable, desc=desc, total=total, leave=leave)
+
+
+def progress_write(message: str, enabled: bool = True) -> None:
+    if not enabled:
+        return
+    if tqdm is None:
+        print(message)
+    else:
+        tqdm.write(message)
 
 
 @dataclass
@@ -409,9 +433,10 @@ def expand_inputs(paths: Sequence[str]) -> List[Path]:
     return sorted(set(path.resolve() for path in expanded))
 
 
-def load_samples(paths: Sequence[str], args: argparse.Namespace) -> List[MotionSample]:
+def load_samples(paths: Sequence[str], args: argparse.Namespace, desc: str = "Load samples") -> List[MotionSample]:
     samples = []
-    for path in expand_inputs(paths):
+    input_paths = expand_inputs(paths)
+    for path in progress_iter(input_paths, desc=desc, enabled=args.show_progress, total=len(input_paths)):
         samples.extend(load_motion_file(path, args))
     if not samples:
         raise RuntimeError(f"No samples loaded from: {paths}")
@@ -500,7 +525,12 @@ def load_reference_full_horizon_dataset(args: argparse.Namespace) -> List[Motion
         indices = rng.choice(indices, size=max_samples, replace=False)
 
     samples = []
-    for idx in indices:
+    for idx in progress_iter(
+        indices,
+        desc="Load full-horizon GT",
+        enabled=args.show_progress,
+        total=len(indices),
+    ):
         seq_len = int(lengths[idx])
         clip = np.asarray(motion[idx, :seq_len], dtype=np.float32).reshape(seq_len, -1, 3)
         if normalize_enabled:
@@ -592,7 +622,7 @@ def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
         indices = rng.choice(indices, size=max_samples, replace=False)
 
     samples = []
-    for idx in indices:
+    for idx in progress_iter(indices, desc="Load GT clips", enabled=args.show_progress, total=len(indices)):
         start = int(start_idx[idx])
         stop = start + expected_span
         clip = np.asarray(joints_all[start:stop:int(args.reference_step)], dtype=np.float32)
@@ -638,9 +668,14 @@ def motion_feature_from_joints(joints: np.ndarray, frames: int) -> np.ndarray:
     return np.concatenate([centered.reshape(-1), velocity.reshape(-1), stats], axis=0)
 
 
-def collect_features(samples: Sequence[MotionSample], frames: int) -> np.ndarray:
+def collect_features(
+    samples: Sequence[MotionSample],
+    frames: int,
+    desc: str = "Collect features",
+    show_progress: bool = True,
+) -> np.ndarray:
     features = []
-    for sample in samples:
+    for sample in progress_iter(samples, desc=desc, enabled=show_progress, total=len(samples)):
         if sample.features is not None:
             features.append(np.asarray(sample.features, dtype=np.float32).reshape(-1))
         elif sample.joints is not None:
@@ -753,9 +788,9 @@ def interactive_metrics(
     args: argparse.Namespace,
 ) -> Dict[str, float]:
     rng = np.random.default_rng(args.seed)
-    gen_features = collect_features(generated, args.feature_frames)
+    gen_features = collect_features(generated, args.feature_frames, desc="Generated features", show_progress=args.show_progress)
     if reference:
-        ref_features = collect_features(reference, args.feature_frames)
+        ref_features = collect_features(reference, args.feature_frames, desc="Reference features", show_progress=args.show_progress)
         dim = min(gen_features.shape[1], ref_features.shape[1])
         gen_features = gen_features[:, :dim]
         ref_features = ref_features[:, :dim]
@@ -763,6 +798,7 @@ def interactive_metrics(
     else:
         gen_features = project_features(gen_features, args.feature_dim, rng)
 
+    progress_write("Computing distribution metrics...", args.show_progress)
     metrics = {
         "diversity": diversity_score(gen_features, args.diversity_pairs, rng),
         "multi_modality": multimodality(generated, gen_features, args.multimodality_pairs, rng),
@@ -833,7 +869,7 @@ def paired_metrics(
             reference_by_id[key] = sample
 
     values = []
-    for sample in generated:
+    for sample in progress_iter(generated, desc="Paired MPJPE", enabled=args.show_progress, total=len(generated)):
         if sample.joints is None:
             continue
         key = sample_pair_id(sample)
@@ -847,19 +883,43 @@ def paired_metrics(
     return {"mpjpe": float(np.mean(values))}
 
 
-def load_scene_occ(path: Optional[str], scene_name: Optional[str]) -> Optional[np.ndarray]:
+def stable_path_key(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
+def resolve_scene_occ_file(path: Optional[str], scene_name: Optional[str]) -> Optional[Path]:
     if path is None:
         return None
     scene_path = Path(path)
+    cache_key = (stable_path_key(scene_path), scene_name)
+    if cache_key in _SCENE_PATH_CACHE:
+        return _SCENE_PATH_CACHE[cache_key]
+
+    resolved = scene_path
     if scene_path.is_dir():
         candidates = []
         if scene_name:
             candidates.extend([scene_path / f"{scene_name}.npy", scene_path / f"{scene_name}.npz"])
         candidates.extend(sorted(scene_path.glob("*.npy")))
         candidates.extend(sorted(scene_path.glob("*.npz")))
-        scene_path = next((candidate for candidate in candidates if candidate.exists()), None)
-        if scene_path is None:
-            return None
+        resolved = next((candidate for candidate in candidates if candidate.exists()), None)
+
+    _SCENE_PATH_CACHE[cache_key] = resolved
+    return resolved
+
+
+def load_scene_occ_entry(path: Optional[str], scene_name: Optional[str]) -> Tuple[Optional[str], Optional[np.ndarray]]:
+    scene_path = resolve_scene_occ_file(path, scene_name)
+    if scene_path is None:
+        return None, None
+
+    scene_key = stable_path_key(scene_path)
+    if scene_key in _SCENE_OCC_CACHE:
+        return scene_key, _SCENE_OCC_CACHE[scene_key]
+
     if scene_path.suffix.lower() == ".npz":
         data = np.load(scene_path)
         key = "occ" if "occ" in data.files else data.files[0]
@@ -869,7 +929,14 @@ def load_scene_occ(path: Optional[str], scene_name: Optional[str]) -> Optional[n
     occ = np.asarray(occ)
     while occ.ndim > 3:
         occ = occ[0]
-    return occ.astype(bool)
+    occ = occ.astype(bool)
+    _SCENE_OCC_CACHE[scene_key] = occ
+    return scene_key, occ
+
+
+def load_scene_occ(path: Optional[str], scene_name: Optional[str]) -> Optional[np.ndarray]:
+    _, occ = load_scene_occ_entry(path, scene_name)
+    return occ
 
 
 def grid_parts(scene_grid: Sequence[float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -889,14 +956,43 @@ def voxel_indices(points: np.ndarray, scene_grid: Sequence[float]) -> Tuple[np.n
     return idx, valid
 
 
+def grid_cache_key(scene_grid: Sequence[float]) -> Tuple[float, ...]:
+    return tuple(float(item) for item in np.asarray(scene_grid, dtype=np.float64).reshape(-1))
+
+
+def distance_field_for_scene(
+    scene_key: str,
+    occ: np.ndarray,
+    scene_grid: Sequence[float],
+    voxel: np.ndarray,
+    show_progress: bool,
+) -> np.ndarray:
+    if distance_transform_edt is None:
+        raise RuntimeError("scipy.ndimage.distance_transform_edt is required for penetration distance.")
+
+    cache_key = (scene_key, grid_cache_key(scene_grid))
+    if cache_key not in _DISTANCE_FIELD_CACHE:
+        progress_write(f"Computing distance field for {Path(scene_key).name}...", show_progress)
+        _DISTANCE_FIELD_CACHE[cache_key] = distance_transform_edt(occ.astype(np.uint8), sampling=voxel)
+    return _DISTANCE_FIELD_CACHE[cache_key]
+
+
 def penetration_for_points(
     points: np.ndarray,
     occ: np.ndarray,
     scene_grid: Sequence[float],
     out_of_bounds_occupied: bool,
+    scene_key: str = "scene",
+    include_distance: bool = True,
+    show_progress: bool = True,
 ) -> Dict[str, float]:
-    if distance_transform_edt is None:
-        raise RuntimeError("scipy.ndimage.distance_transform_edt is required for penetration distance.")
+    _, dims, voxel = grid_parts(scene_grid)
+    if tuple(occ.shape) != tuple(dims):
+        raise RuntimeError(
+            f"Scene occupancy shape {tuple(occ.shape)} does not match scene_grid dims {tuple(dims)} "
+            f"for {scene_key}. Check scene_occ and scene_grid."
+        )
+
     flat = points.reshape(-1, 3)
     idx, valid = voxel_indices(flat, scene_grid)
     occ_flags = occ[idx[:, 0], idx[:, 1], idx[:, 2]]
@@ -905,15 +1001,17 @@ def penetration_for_points(
     else:
         occ_flags[~valid] = False
 
-    _, _, voxel = grid_parts(scene_grid)
-    distance_field = distance_transform_edt(occ.astype(np.uint8), sampling=voxel)
-    dist = distance_field[idx[:, 0], idx[:, 1], idx[:, 2]]
-    pene_dist = dist[occ_flags]
-    return {
-        "pene_scene_percent": float(occ_flags.mean()),
-        "pene_mean": float(pene_dist.mean()) if pene_dist.size else 0.0,
-        "pene_max": float(pene_dist.max()) if pene_dist.size else 0.0,
-    }
+    metrics = {"pene_scene_percent": float(occ_flags.mean())}
+    if include_distance and np.any(occ_flags):
+        distance_field = distance_field_for_scene(scene_key, occ, scene_grid, voxel, show_progress)
+        dist = distance_field[idx[:, 0], idx[:, 1], idx[:, 2]]
+        pene_dist = dist[occ_flags]
+        metrics["pene_mean"] = float(pene_dist.mean()) if pene_dist.size else 0.0
+        metrics["pene_max"] = float(pene_dist.max()) if pene_dist.size else 0.0
+    elif include_distance:
+        metrics["pene_mean"] = 0.0
+        metrics["pene_max"] = 0.0
+    return metrics
 
 
 def sample_body_points(sample: MotionSample, mode: str) -> Optional[np.ndarray]:
@@ -924,17 +1022,33 @@ def sample_body_points(sample: MotionSample, mode: str) -> Optional[np.ndarray]:
     return sample.vertices if sample.vertices is not None else sample.joints
 
 
-def penetration_metrics(samples: Sequence[MotionSample], args: argparse.Namespace) -> Dict[str, float]:
+def penetration_metrics(
+    samples: Sequence[MotionSample],
+    args: argparse.Namespace,
+    include_distance: bool = True,
+    desc: str = "Penetration",
+) -> Dict[str, float]:
+    if args.scene_occ is None:
+        return {}
+
     per_sample = []
-    for sample in samples:
+    for sample in progress_iter(samples, desc=desc, enabled=args.show_progress, total=len(samples)):
         points = sample_body_points(sample, args.body_points)
         if points is None:
             continue
-        occ = load_scene_occ(args.scene_occ, sample.scene_name)
+        scene_key, occ = load_scene_occ_entry(args.scene_occ, sample.scene_name)
         if occ is None:
             continue
         per_sample.append(
-            penetration_for_points(points, occ, args.scene_grid, args.out_of_bounds_occupied)
+            penetration_for_points(
+                points,
+                occ,
+                args.scene_grid,
+                args.out_of_bounds_occupied,
+                scene_key=scene_key or "scene",
+                include_distance=include_distance,
+                show_progress=args.show_progress,
+            )
         )
     return aggregate_dicts(per_sample)
 
@@ -958,13 +1072,13 @@ def foot_sliding_for_joints(joints: np.ndarray, args: argparse.Namespace) -> flo
 
 def locomotion_metrics(samples: Sequence[MotionSample], args: argparse.Namespace) -> Dict[str, float]:
     values = []
-    for sample in samples:
+    for sample in progress_iter(samples, desc="Foot sliding", enabled=args.show_progress, total=len(samples)):
         curr = {}
         if sample.joints is not None:
             curr["foot_sliding"] = foot_sliding_for_joints(sample.joints, args)
         values.append(curr)
     metrics = aggregate_dicts(values)
-    metrics.update(penetration_metrics(samples, args))
+    metrics.update(penetration_metrics(samples, args, include_distance=True, desc="Locomotion penetration"))
     return metrics
 
 
@@ -1016,12 +1130,12 @@ def reaching_for_sample(sample: MotionSample, goal: np.ndarray, args: argparse.N
 def reaching_metrics(samples: Sequence[MotionSample], args: argparse.Namespace) -> Dict[str, float]:
     goal_map = load_goal_map(args.goal_file)
     values = []
-    for sample in samples:
+    for sample in progress_iter(samples, desc="Reaching", enabled=args.show_progress, total=len(samples)):
         goal = goal_for_sample(sample, args, goal_map)
         curr = reaching_for_sample(sample, goal, args) if goal is not None else {}
         values.append(curr)
     metrics = aggregate_dicts(values)
-    pene = penetration_metrics(samples, args)
+    pene = penetration_metrics(samples, args, include_distance=False, desc="Reaching penetration")
     if "pene_scene_percent" in pene:
         metrics["pene_scene_percent"] = pene["pene_scene_percent"]
     return metrics
@@ -1153,6 +1267,14 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument("--output", default=config_default(config, "output", None), help="Optional JSON output path.")
     parser.add_argument("--fps", type=float, default=config_default(config, "fps", 20.0))
     parser.add_argument("--seed", type=int, default=config_default(config, "seed", 1234))
+    parser.add_argument(
+        "--show-progress",
+        dest="show_progress",
+        action="store_true",
+        default=config_default(config, "show_progress", True),
+        help="Show tqdm progress bars during evaluation.",
+    )
+    parser.add_argument("--no-progress", dest="show_progress", action="store_false", help="Disable progress bars.")
     parser.add_argument("--feature-frames", type=int, default=config_default(config, "feature_frames", 64))
     parser.add_argument("--feature-dim", type=int, default=config_default(config, "feature_dim", 512))
     parser.add_argument("--diversity-pairs", type=int, default=config_default(config, "diversity_pairs", 200))
@@ -1209,10 +1331,10 @@ def main() -> None:
     args.hand_joints = parse_ints(args.hand_joints)
     args.joints_ind = parse_ints(args.joints_ind)
 
-    generated = load_samples(args.generated, args)
+    generated = load_samples(args.generated, args, desc="Load generated")
     reference = []
     if args.reference:
-        reference.extend(load_samples(args.reference, args))
+        reference.extend(load_samples(args.reference, args, desc="Load reference"))
     if args.reference_full_horizon_dataset:
         reference.extend(load_reference_full_horizon_dataset(args))
     elif args.reference_dataset:
