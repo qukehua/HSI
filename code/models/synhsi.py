@@ -19,13 +19,22 @@ class Sampler:
         self.timesteps = timesteps
         self.motion_len = kwargs.get('motion_len', None)
         self.scene_type = kwargs.get('scene_type', None)
+        self.objective = str(kwargs.get('objective', 'flow_matching')).lower()
+        if self.objective in ('flow', 'fm', 'rectified_flow', 'rectified-flow', 'rf'):
+            self.objective = 'flow_matching'
+        elif self.objective in ('diffusion', 'ddpm', 'epsilon', 'eps'):
+            self.objective = 'ddpm'
+        if self.objective not in ('flow_matching', 'ddpm'):
+            raise ValueError("objective must be 'flow_matching' or 'ddpm'.")
         self.use_aux_losses = kwargs.get('use_aux_losses', False)
         self.aux_loss_weights = kwargs.get('aux_loss_weights', {
             'pelvis_traj': 0.5,
             'duration': 0.2,
             'valid_mask': 0.1,
             'smoothness': 0.05,
+            'completion': 0.2,
         })
+        self.completion_pos_weight = kwargs.get('completion_pos_weight', None)
         self.beta_schedule = kwargs.get('beta_schedule', 'linear')
         self.beta_start = kwargs.get('beta_start', 0.0001)
         self.beta_end = kwargs.get('beta_end', 0.02)
@@ -78,6 +87,14 @@ class Sampler:
         )
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
+    def flow_time_fraction(self, t, x_shape):
+        tau = (t.to(dtype=torch.float32) + 1.0) / float(self.timesteps)
+        return tau.reshape(-1, *([1] * (len(x_shape) - 1))).clamp(0.0, 1.0)
+
+    def q_flow_sample(self, x_start, t, noise):
+        tau = self.flow_time_fraction(t, x_start.shape)
+        return (1.0 - tau) * x_start + tau * noise
+
 
     def p_losses(
             self,
@@ -97,6 +114,7 @@ class Sampler:
             is_loco,
             length=None,
             valid_mask=None,
+            completion_label=None,
             object_present=None,
             noise=None,
             loss_type='huber',
@@ -111,9 +129,16 @@ class Sampler:
             valid_mask = valid_mask.to(device=x_start.device, dtype=torch.bool)
         loss_mask = torch.logical_or(mask, torch.logical_not(valid_mask).unsqueeze(-1))
 
-        noise[loss_mask] = 0.
-
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        if self.objective == 'flow_matching':
+            x_noisy = self.q_flow_sample(x_start=x_start, t=t, noise=noise)
+            x_noisy = x_noisy.masked_fill(loss_mask, 0.0)
+            x_noisy[mask] = x_start[mask]
+            target = noise - x_start
+        else:
+            noise = noise.clone()
+            noise[loss_mask] = 0.
+            x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+            target = noise
 
         if self.dataset.load_scene:
             with torch.no_grad():
@@ -177,32 +202,35 @@ class Sampler:
             pi,
             need_pi,
             object_present=object_present,
-            return_dict=self.use_aux_losses,
+            return_dict=self.use_aux_losses or completion_label is not None,
         )
-        predicted_noise = model_out["pred_noise"] if isinstance(model_out, dict) else model_out
+        predicted_field = model_out["pred_noise"] if isinstance(model_out, dict) else model_out
 
         mask_inv = torch.logical_not(loss_mask)
 
         if loss_type == 'l1':
-            denoise_loss = F.l1_loss(noise[mask_inv], predicted_noise[mask_inv])
+            denoise_loss = F.l1_loss(target[mask_inv], predicted_field[mask_inv])
         elif loss_type == 'l2':
-            denoise_loss = F.mse_loss(noise[mask_inv], predicted_noise[mask_inv])
+            denoise_loss = F.mse_loss(target[mask_inv], predicted_field[mask_inv])
         elif loss_type == "huber":
-            denoise_loss = F.smooth_l1_loss(noise[mask_inv], predicted_noise[mask_inv])
+            denoise_loss = F.smooth_l1_loss(target[mask_inv], predicted_field[mask_inv])
         else:
             raise NotImplementedError()
 
         zero_loss = denoise_loss.new_zeros(())
         loss_terms = {
             "denoise": denoise_loss,
+            "flow_matching": denoise_loss if self.objective == 'flow_matching' else zero_loss,
             "aux_total": zero_loss,
             "pelvis_traj": zero_loss,
             "duration": zero_loss,
             "valid_mask": zero_loss,
+            "completion": zero_loss,
             "smoothness": zero_loss,
             "pelvis_traj_weighted": zero_loss,
             "duration_weighted": zero_loss,
             "valid_mask_weighted": zero_loss,
+            "completion_weighted": zero_loss,
             "smoothness_weighted": zero_loss,
         }
         loss = denoise_loss
@@ -223,9 +251,25 @@ class Sampler:
                 model_out["valid_mask_prob"].clamp(min=1e-6, max=1.0 - 1e-6),
                 valid_mask.to(dtype=x_start.dtype),
             )
+            if completion_label is None:
+                completion_target = (length < x_start.shape[1]).to(dtype=x_start.dtype)
+            else:
+                completion_target = completion_label.to(device=x_start.device, dtype=x_start.dtype).reshape(-1)
+            pos_weight = None
+            if self.completion_pos_weight is not None:
+                pos_weight = torch.as_tensor(
+                    self.completion_pos_weight,
+                    dtype=x_start.dtype,
+                    device=x_start.device,
+                )
+            completion_loss = F.binary_cross_entropy_with_logits(
+                model_out["completion_logits"].reshape(-1),
+                completion_target,
+                pos_weight=pos_weight,
+            )
 
-            if predicted_noise.shape[1] > 2:
-                smooth = predicted_noise[:, 2:] - 2 * predicted_noise[:, 1:-1] + predicted_noise[:, :-2]
+            if predicted_field.shape[1] > 2:
+                smooth = predicted_field[:, 2:] - 2 * predicted_field[:, 1:-1] + predicted_field[:, :-2]
                 smooth_loss = smooth.pow(2).mean()
             else:
                 smooth_loss = torch.zeros((), device=x_start.device)
@@ -233,11 +277,13 @@ class Sampler:
             pelvis_weighted = self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
             duration_weighted = self.aux_loss_weights.get('duration', 0.2) * duration_loss
             valid_weighted = self.aux_loss_weights.get('valid_mask', 0.1) * valid_loss
+            completion_weighted = self.aux_loss_weights.get('completion', 0.2) * completion_loss
             smooth_weighted = self.aux_loss_weights.get('smoothness', 0.05) * smooth_loss
             aux_total = (
                 pelvis_weighted
                 + duration_weighted
                 + valid_weighted
+                + completion_weighted
                 + smooth_weighted
             )
             loss = loss + aux_total
@@ -247,10 +293,12 @@ class Sampler:
                     "pelvis_traj": pelvis_loss,
                     "duration": duration_loss,
                     "valid_mask": valid_loss,
+                    "completion": completion_loss,
                     "smoothness": smooth_loss,
                     "pelvis_traj_weighted": pelvis_weighted,
                     "duration_weighted": duration_weighted,
                     "valid_mask_weighted": valid_weighted,
+                    "completion_weighted": completion_weighted,
                     "smoothness_weighted": smooth_weighted,
                 }
             )
@@ -270,13 +318,34 @@ class Sampler:
             self.set_fixed_points(points, None, fixed_points, mat, joint_id=self.mask_ind, fix_mode=True, fix_goal=False)
         imgs = []
         occs = []
-        for i in tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps):
+        final_model_out = None
+        sample_desc = 'flow matching ODE step' if self.objective == 'flow_matching' else 'sampling loop time step'
+        for i in tqdm(reversed(range(0, self.timesteps)), desc=sample_desc, total=self.timesteps):
             model_used = self.model
 
-            points, occ = self.p_sample(model_used, points, fixed_points, mat, scene_flag,
-                                        torch.full((self.batch_size,), i, device=device, dtype=torch.long), i,
-                                        text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco
-                                        )
+            sample_out = self.p_sample(
+                model_used,
+                points,
+                fixed_points,
+                mat,
+                scene_flag,
+                torch.full((self.batch_size,), i, device=device, dtype=torch.long),
+                i,
+                text_emb,
+                pelvis_goal,
+                hand_goal,
+                is_pick,
+                need_scene,
+                need_pelvis_dir,
+                pi,
+                need_pi,
+                is_loco,
+                return_model_out=(i == 0),
+            )
+            if i == 0:
+                points, occ, final_model_out = sample_out
+            else:
+                points, occ = sample_out
             if self.auto_regre_num > 0:
                 self.set_fixed_points(points, None, fixed_points, mat, joint_id=self.mask_ind, fix_mode=True, fix_goal=False)
 
@@ -286,17 +355,12 @@ class Sampler:
             if occ is not None:
                 occs.append(occ.cpu().numpy())
 
-        return imgs, occs
+        return imgs, occs, final_model_out
 
     @torch.no_grad()
     def p_sample(self, model, x, fixed_points, mat, scene_flag, t, t_index,
-                 text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco):
-        betas_t = extract(self.betas, t, x.shape)
-        sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, t, x.shape
-        )
-        sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x.shape)
-
+                 text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
+                 return_model_out=False):
         if self.dataset.load_scene:
             x_orig = transform_points(self.dataset.denormalize_torch(x), mat)
             mat_for_query = mat.clone()
@@ -348,19 +412,45 @@ class Sampler:
         else:
             occ = None
 
-        predicted_noise = model(x, occ, t, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi)
+        model_out = model(
+            x,
+            occ,
+            t,
+            text_emb,
+            pelvis_goal,
+            hand_goal,
+            is_pick,
+            need_scene,
+            need_pelvis_dir,
+            pi,
+            need_pi,
+            return_dict=return_model_out,
+        )
+        predicted_field = model_out["pred_noise"] if isinstance(model_out, dict) else model_out
         if self.debug_sampling and (t_index >= self.timesteps - 3 or t_index in (90, 50, 10, 0)):
             print(
                 "sample_debug",
                 f"t={t_index}",
                 f"x_abs_max={x.detach().abs().max().item():.6f}",
-                f"eps_abs_max={predicted_noise.detach().abs().max().item():.6f}",
-                f"x_minus_eps_abs_max={(x - predicted_noise).detach().abs().max().item():.6f}",
+                f"field_abs_max={predicted_field.detach().abs().max().item():.6f}",
+                f"x_minus_field_abs_max={(x - predicted_field).detach().abs().max().item():.6f}",
             )
+
+        if self.objective == 'flow_matching':
+            sample = x - predicted_field / float(self.timesteps)
+            if return_model_out:
+                return sample, occ, model_out
+            return sample, occ
+
+        betas_t = extract(self.betas, t, x.shape)
+        sqrt_one_minus_alphas_cumprod_t = extract(
+            self.sqrt_one_minus_alphas_cumprod, t, x.shape
+        )
+        sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x.shape)
 
         if self.clip_denoised:
             sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x.shape)
-            pred_x0 = (x - sqrt_one_minus_alphas_cumprod_t * predicted_noise) / sqrt_alphas_cumprod_t.clamp_min(1e-8)
+            pred_x0 = (x - sqrt_one_minus_alphas_cumprod_t * predicted_field) / sqrt_alphas_cumprod_t.clamp_min(1e-8)
             pred_x0 = pred_x0.clamp(self.clip_denoised_min, self.clip_denoised_max)
             model_mean = (
                 extract(self.posterior_mean_coef1, t, x.shape) * pred_x0
@@ -368,14 +458,19 @@ class Sampler:
             )
         else:
             model_mean = sqrt_recip_alphas_t * (
-                    x - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t
+                    x - betas_t * predicted_field / sqrt_one_minus_alphas_cumprod_t
             )
 
         if t_index == 0:
+            if return_model_out:
+                return model_mean, occ, model_out
             return model_mean, occ
-        else:
-            posterior_variance_t = extract(self.posterior_variance, t, x.shape)
-            return model_mean + torch.sqrt(posterior_variance_t) * torch.randn_like(x), occ
+
+        posterior_variance_t = extract(self.posterior_variance, t, x.shape)
+        sample = model_mean + torch.sqrt(posterior_variance_t) * torch.randn_like(x)
+        if return_model_out:
+            return sample, occ, model_out
+        return sample, occ
 
 
     def set_fixed_points(self, img, goal, fixed_points, mat, joint_id, fix_mode, fix_goal):
@@ -628,12 +723,28 @@ class PhaseContactTerminationHeads(nn.Module):
         self.phase_head = nn.Linear(dim_model, phase_dim)
         self.contact_head = nn.Linear(dim_model, contact_dim)
         self.end_head = nn.Linear(dim_model, 1)
+        self.completion_head = nn.Sequential(
+            nn.Linear(dim_model * 3, dim_model),
+            nn.SiLU(inplace=False),
+            nn.Linear(dim_model, 1),
+        )
 
     def forward(self, frame_tokens: torch.Tensor) -> Dict[str, torch.Tensor]:
+        summary = torch.cat(
+            [
+                frame_tokens[:, -1],
+                frame_tokens.mean(dim=1),
+                frame_tokens.amax(dim=1),
+            ],
+            dim=-1,
+        )
+        completion_logits = self.completion_head(summary).squeeze(-1)
         return {
             "phase_latent": self.phase_head(frame_tokens),
             "contact_logits": self.contact_head(frame_tokens),
             "end_logits": self.end_head(frame_tokens).squeeze(-1),
+            "completion_logits": completion_logits,
+            "completion_prob": torch.sigmoid(completion_logits),
         }
 
 
@@ -663,12 +774,23 @@ class Unet(nn.Module):
             scene_query_coord_scale=1.0,
             phase_dim=32,
             contact_dim=6,
+            architecture="global_to_local",
             return_full_state=False,
             **kwargs
     ):
         super().__init__()
 
-        self.model_type = "GlobalToLocalHOSIDenoiser"
+        self.architecture = str(architecture or kwargs.get("model_type", "ar_transformer")).lower()
+        if self.architecture in ("lingo", "ar", "autoregressive", "auto_regressive", "window"):
+            self.architecture = "ar_transformer"
+        elif self.architecture in ("global", "global_to_local", "humoworld", "end_to_end"):
+            self.architecture = "global_to_local"
+        if self.architecture not in ("ar_transformer", "global_to_local"):
+            raise ValueError(
+                f"Unknown architecture={architecture!r}. "
+                "Use ar_transformer or global_to_local."
+            )
+        self.model_type = "LINGOWindowDenoiser" if self.architecture == "ar_transformer" else "GlobalToLocalHOSIDenoiser"
         self.dim_model = dim_model
         self.load_scene = load_scene
         self.load_language = load_language
@@ -709,7 +831,7 @@ class Unet(nn.Module):
         )
         state_input_dim = dim_input + (object_motion_dim if self.use_object else 0)
         self.embedding_input = nn.Linear(state_input_dim, dim_model)
-        self.embedding_output = nn.Linear(dim_output, dim_model)
+        self.embedding_output = nn.Linear(dim_model, dim_output)
 
         if self.load_language:
             self.embedding_language = LanguageEncoder(dim_output=dim_model, dim_input=language_feature_dim)
@@ -734,23 +856,28 @@ class Unet(nn.Module):
                                                  num_layers=num_layers
         )
 
-        self.global_branch = GlobalBranch(
-            dim_model=dim_model,
-            anchor_stride=trajectory_anchor_stride,
-            phase_dim=phase_dim,
-        )
-        self.dynamic_scene_query = DynamicSceneQuery(
-            dim_model=dim_model,
-            num_query_frames=num_scene_query_frames,
-            scene_channels=vit_channels if self.load_scene else 0,
-            coord_scale=scene_query_coord_scale,
-        )
-        self.local_branch = LocalBranch(
-            dim_model=dim_model,
-            dim_human=dim_output,
-            dim_object=object_motion_dim,
-            phase_dim=phase_dim,
-        )
+        self.global_branch = None
+        self.dynamic_scene_query = None
+        self.local_branch = None
+        if self.architecture == "global_to_local":
+            self.global_branch = GlobalBranch(
+                dim_model=dim_model,
+                anchor_stride=trajectory_anchor_stride,
+                phase_dim=phase_dim,
+            )
+            self.dynamic_scene_query = DynamicSceneQuery(
+                dim_model=dim_model,
+                num_query_frames=num_scene_query_frames,
+                scene_channels=vit_channels if self.load_scene else 0,
+                coord_scale=scene_query_coord_scale,
+            )
+            self.local_branch = LocalBranch(
+                dim_model=dim_model,
+                dim_human=dim_output,
+                dim_object=object_motion_dim,
+                phase_dim=phase_dim,
+            )
+        self.object_output = nn.Linear(dim_model, object_motion_dim) if self.use_object else None
         self.heads = PhaseContactTerminationHeads(
             dim_model=dim_model,
             phase_dim=phase_dim,
@@ -849,6 +976,39 @@ class Unet(nn.Module):
         tokens = self.transformer(tokens)
 
         frame_tokens = tokens[len(cond_tokens):].permute(1, 0, 2)
+        if self.architecture == "ar_transformer":
+            human_motion = self.embedding_output(frame_tokens)
+            if self.use_object:
+                object_motion = self.object_output(frame_tokens)
+                object_motion = object_motion * object_present.to(object_motion.dtype).view(-1, 1, 1)
+            else:
+                object_motion = frame_tokens.new_zeros(batch_size, x.shape[1], self.object_motion_dim)
+            aux_out = self.heads(frame_tokens)
+            pred = {
+                "pred_noise": human_motion,
+                "x0": human_motion,
+                "human_motion": human_motion,
+                "object_motion": object_motion,
+                "pelvis_traj_anchor": human_motion[..., :3],
+                "object_traj_anchor": object_motion[..., :3],
+                "pelvis_traj_dense": human_motion[..., :3],
+                "object_traj_dense": object_motion[..., :3],
+                "phase_latent": aux_out["phase_latent"],
+                "global_phase_latent": aux_out["phase_latent"],
+                "contact_logits": aux_out["contact_logits"],
+                "end_logits": aux_out["end_logits"],
+                "valid_mask_prob": end_distribution_to_valid_mask(torch.softmax(aux_out["end_logits"], dim=-1)),
+                "completion_logits": aux_out["completion_logits"],
+                "completion_prob": aux_out["completion_prob"],
+                "object_present": object_present,
+            }
+
+            if return_dict:
+                return pred
+            if self.return_full_state and self.use_object:
+                return torch.cat([pred["human_motion"], pred["object_motion"]], dim=-1)
+            return pred["human_motion"]
+
         global_out = self.global_branch(frame_tokens, object_present)
         pelvis_dense = temporal_upsample(global_out["pelvis_traj_anchor"], x.shape[1])
         object_dense = temporal_upsample(global_out["object_traj_anchor"], x.shape[1])
@@ -884,6 +1044,8 @@ class Unet(nn.Module):
             "contact_logits": aux_out["contact_logits"],
             "end_logits": aux_out["end_logits"],
             "valid_mask_prob": end_distribution_to_valid_mask(torch.softmax(aux_out["end_logits"], dim=-1)),
+            "completion_logits": aux_out["completion_logits"],
+            "completion_prob": aux_out["completion_prob"],
             "object_present": object_present,
         }
 

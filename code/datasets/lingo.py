@@ -9,10 +9,10 @@ from torch.utils.data import Dataset
 
 
 class LingoDataset(Dataset):
-    """Full-horizon padded LINGO/HSI dataset.
+    """Windowed autoregressive LINGO/HSI dataset.
 
-    Expected folder layout is produced by preprocess_full_horizon_dataset.py.
-    The class name stays LingoDataset so the existing Hydra config and training
+    Expected folder layout is produced by preprocess_window_dataset.py. The
+    class name stays LingoDataset so the existing Hydra config and training
     script can keep importing datasets.lingo.LingoDataset.
     """
 
@@ -81,6 +81,13 @@ class LingoDataset(Dataset):
                 f"Config max_window_size={self.max_window_size} does not match "
                 f"human_motion length={self.human_motion.shape[1]} in {self.folder}."
             )
+        completion_path = self.folder / "is_terminal_window.npy"
+        if not completion_path.exists():
+            completion_path = self.folder / "completion_label.npy"
+        if completion_path.exists():
+            self.completion_label = np.load(completion_path, mmap_mode="r")
+        else:
+            self.completion_label = np.asarray(self.length < self.max_window_size, dtype=np.bool_)
 
         self.indices = np.arange(len(self.length), dtype=np.int64)
         if self.split not in [None, "None", "none", "null"]:
@@ -178,6 +185,7 @@ class LingoDataset(Dataset):
             np.asarray(self.length[src_idx], dtype=np.int64),
             np.asarray(self.valid_mask[src_idx], dtype=np.bool_),
             np.asarray(self.object_present[src_idx], dtype=np.bool_),
+            np.asarray(self.completion_label[src_idx], dtype=np.bool_),
         )
 
     def get_occ_for_points(self, points, scene_flag):

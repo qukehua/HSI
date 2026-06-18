@@ -60,14 +60,17 @@ def write_jsonl(path, payload):
 LOSS_LOG_ORDER = (
     "total",
     "denoise",
+    "flow_matching",
     "aux_total",
     "pelvis_traj_weighted",
     "duration_weighted",
     "valid_mask_weighted",
+    "completion_weighted",
     "smoothness_weighted",
     "pelvis_traj",
     "duration",
     "valid_mask",
+    "completion",
     "smoothness",
 )
 
@@ -157,13 +160,18 @@ def build_lr_scheduler(optimizer, cfg):
 
 
 def move_lingo_batch(batch, device):
-    joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = batch
+    completion_label = None
+    if len(batch) == 15:
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = batch
+    else:
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label = batch
     return joints.to(device), \
            mat.to(device), scene_flag.to(device), \
            text_clip_embedding.to(device), \
            pelvis_goal.to(device), hand_goal.to(device), \
            is_pick.to(device), need_scene.to(device), need_pelvis_dir.to(device), pi.to(device), \
-           need_pi.to(device), is_loco.to(device), length.to(device), valid_mask.to(device), object_present.to(device)
+           need_pi.to(device), is_loco.to(device), length.to(device), valid_mask.to(device), object_present.to(device), \
+           None if completion_label is None else completion_label.to(device)
 
 
 @torch.no_grad()
@@ -174,7 +182,7 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
 
     progress = tqdm(dataloader, desc=f"Val {epoch}", disable=not show_progress, leave=False)
     for batch in progress:
-        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = move_lingo_batch(batch, device)
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label = move_lingo_batch(batch, device)
         batch_size = joints.shape[0]
         t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
         mask, _, _ = get_mask(joints, -1, p=1., fixed_frame=cfg.auto_regre_num)
@@ -182,7 +190,7 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
             joints, mat, scene_flag, mask, t,
             text_clip_embedding, pelvis_goal, hand_goal,
             is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
-            length=length, valid_mask=valid_mask, object_present=object_present,
+            length=length, valid_mask=valid_mask, completion_label=completion_label, object_present=object_present,
             return_loss_dict=True,
         )
         update_loss_totals(total_losses, loss, batch_size)
@@ -277,7 +285,7 @@ def train_ddp(rank, world_size, cfg):
             global_step = epoch * len(dataloader) + step
             optimizer.zero_grad()
 
-            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = move_lingo_batch(batch, device)
+            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label = move_lingo_batch(batch, device)
 
             batch_size = joints.shape[0]
             t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
@@ -288,7 +296,7 @@ def train_ddp(rank, world_size, cfg):
                 joints, mat, scene_flag, mask, t,
                 text_clip_embedding, pelvis_goal, hand_goal,
                 is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
-                length=length, valid_mask=valid_mask, object_present=object_present,
+                length=length, valid_mask=valid_mask, completion_label=completion_label, object_present=object_present,
                 return_loss_dict=True,
             )
             loss = loss_dict["total"]

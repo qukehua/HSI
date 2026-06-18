@@ -105,10 +105,16 @@ def sample_step(cfg, step, mat, fixed_points, sampler, cond, trajectory, pi):
     scene_flag = sampler.dataset.scene_dict[cond['scene_name']]
     scene_flag = torch.tensor([scene_flag]*cfg.batch_size).to(cfg.device)
 
-    samples, occs = sampler.p_sample_loop(fixed_points, mat, scene_flag, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
+    samples, occs, model_out = sampler.p_sample_loop(fixed_points, mat, scene_flag, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
 
     points_gene = samples[-1]
     points_orig = transform_points(sampler.dataset.denormalize_torch(points_gene), mat)
+    completion_prob = None
+    completion_logits = None
+    if isinstance(model_out, dict) and "completion_prob" in model_out:
+        completion_prob = model_out["completion_prob"].detach()
+        completion_logits = model_out["completion_logits"].detach()
+        print(f"completion_prob: {completion_prob.reshape(-1).cpu().numpy()}")
 
     info_dict = {
         'points_orig': points_orig.reshape(cfg.batch_size, cfg.max_window_size, 3*cfg.dataset.nb_joints),
@@ -122,7 +128,9 @@ def sample_step(cfg, step, mat, fixed_points, sampler, cond, trajectory, pi):
         'scene_flag': scene_flag,
         'hand_goal': hand_goal,
         'is_pick': is_pick,
-        'occ': occs[-1],
+        'occ': occs[-1] if len(occs) > 0 else None,
+        'completion_prob': completion_prob,
+        'completion_logits': completion_logits,
     }
 
     return info_dict
@@ -218,11 +226,14 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
     points_all = []
     pi_list = []
     raw_text_list = []
+    completion_prob_list = []
+    completion_stop_reason_list = []
 
     for seg_id in range(seg_num):
         if seg_id >= 1:
             cond = get_guidance(cfg, seg_id)
         seg_len = cond['episode_num']
+        is_loco_segment = bool(cond['is_loco'].reshape(-1)[0].item())
 
         if seg_id == 0:
             stand_start_idx_list = [100]
@@ -276,7 +287,7 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
         else:
             points_orig = torch.from_numpy(points_all[-1].reshape(cfg.batch_size, -1, cfg.dataset.nb_joints*3)).to(cfg.device)
 
-        if cond['is_loco']:
+        if is_loco_segment:
             if seg_id == 0:
                 start_loc = cond['start_location'].cpu().numpy()[[0, 2]]
             else:
@@ -287,6 +298,7 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
             trajectory = None
 
         # sample loop
+        completion_hits = 0
         for step in tqdm(range(seg_len)):
             if step == 0:
                 mat = get_mat(cfg, points_orig)
@@ -306,7 +318,36 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
             info_dict = sample_step(cfg, step, mat, fixed_points, sampler_body, cond, trajectory, pi)
             points = info_dict['points_orig']  # points in global coordinates and is denormalized
 
-            if step == seg_len - 1:
+            completion_value = float("nan")
+            if info_dict.get('completion_prob') is not None:
+                completion_value = float(info_dict['completion_prob'].reshape(-1)[0].detach().cpu().item())
+            completion_prob_list.append(completion_value)
+
+            stop_after_window = False
+            stop_reason = ""
+            if is_loco_segment and seg_id != seg_num - 1:
+                curr_loc = points[0, -1, :3].cpu().numpy().copy()
+                curr_loc[1] = 0.0
+                end_point = cond['pelvis_goal'].cpu().numpy().copy()
+                dist2end = np.linalg.norm(curr_loc - end_point) # distance to the end point
+                if dist2end < cfg.locomotion_threshold:
+                    stop_after_window = True
+                    stop_reason = f"locomotion_dist<{float(cfg.locomotion_threshold):.3f}"
+            elif bool(cfg.get("use_completion_stop", False)):
+                min_step = int(cfg.get("completion_min_step", 1))
+                threshold = float(cfg.get("completion_threshold", 0.7))
+                patience = max(1, int(cfg.get("completion_patience", 1)))
+                if step + 1 >= min_step and completion_value >= threshold:
+                    completion_hits += 1
+                else:
+                    completion_hits = 0
+                if completion_hits >= patience:
+                    stop_after_window = True
+                    stop_reason = f"completion_prob>={threshold:.3f}"
+            completion_stop_reason_list.append(stop_reason)
+
+            is_last_window = step == seg_len - 1 or stop_after_window
+            if is_last_window:
                 if step == 0 and seg_id > 0:
                     points_all.append(points.cpu().numpy()[:, cfg.auto_regre_num:])
                 else:
@@ -317,13 +358,9 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
                 else:
                     points_all.append(points.cpu().numpy()[:, :-cfg.auto_regre_num])
 
-            if cond['is_loco'] and seg_id != seg_num - 1:
-                curr_loc = points[0, -1, :3].cpu().numpy().copy()
-                curr_loc[1] = 0.0
-                end_point = cond['pelvis_goal'].cpu().numpy().copy()
-                dist2end = np.linalg.norm(curr_loc - end_point) # distance to the end point
-                if dist2end < cfg.locomotion_threshold:
-                    break
+            if stop_after_window:
+                print(f"Stop segment {seg_id} at window {step}: {stop_reason}, completion_prob={completion_value:.4f}")
+                break
 
 
     points_all = np.concatenate(points_all, axis=1).reshape(cfg.batch_size, -1, cfg.dataset.nb_joints, 3)
@@ -341,6 +378,8 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
                         'test_setting': cfg.test_setting, 'repeat_time': cfg.repeat_time,
                         'mm_group_id': cfg.test_setting,
                         'raw_text': raw_text_list,
+                        'completion_prob': np.asarray(completion_prob_list, dtype=np.float32),
+                        'completion_stop_reason': completion_stop_reason_list,
                         }
         if save_filename is None:
             save_filename = f"output__{cfg.test_setting}__{cfg.repeat_time}.pkl"

@@ -1,4 +1,4 @@
-folder: /share/qkh/dataset/lingo/full_horizon_t120_s3
+folder: /share/qkh/dataset/lingo/window_t16_s3
 scene_source_dir: /share/qkh/dataset/lingo
 device: ${device}
 batch_size: ${batch_size}

@@ -6,8 +6,9 @@ pelvis:
   batch_size: ${batch_size}
   channel: ${times:${dataset.nb_joints},3}
   auto_regre_num: ${auto_regre_num}
-  timesteps: 100
-  beta_schedule: cosine
+  timesteps: 50
+  objective: flow_matching
+  beta_schedule: linear
   beta_schedule_s: 0.008
   beta_start: 0.0001
   beta_end: 0.02
@@ -17,9 +18,11 @@ pelvis:
   debug_sampling: false
   motion_len: ${motion_len}
   scene_type: ${scene_type}
-  use_aux_losses: false
+  use_aux_losses: true
+  completion_pos_weight: 32.0
   aux_loss_weights:
-    pelvis_traj: 0.5
-    duration: 0.2
+    pelvis_traj: 0
+    duration: 0
     valid_mask: 0
+    completion: 0.2
     smoothness: 0

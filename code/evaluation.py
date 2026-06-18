@@ -456,99 +456,6 @@ def resolve_relative_path(base: Path, value: Optional[str]) -> Optional[Path]:
     return path if path.is_absolute() else base / path
 
 
-def load_reference_full_horizon_dataset(args: argparse.Namespace) -> List[MotionSample]:
-    folder = Path(args.reference_full_horizon_dataset)
-    if not folder.exists():
-        raise RuntimeError(f"Full-horizon reference dataset folder does not exist: {folder}")
-
-    motion_path = folder / args.reference_full_horizon_motion_file
-    length_path = folder / args.reference_full_horizon_length_file
-    mat_path = folder / args.reference_full_horizon_mat_file
-    for path in (motion_path, length_path, mat_path):
-        if not path.exists():
-            raise RuntimeError(f"Full-horizon reference file does not exist: {path}")
-
-    motion = np.load(motion_path, mmap_mode="r")
-    lengths = np.load(length_path, mmap_mode="r")
-    mats = np.load(mat_path, mmap_mode="r")
-    text_path = folder / args.reference_full_horizon_text_file
-    texts = load_pickle(text_path) if text_path.exists() else [None] * len(lengths)
-
-    metadata = {}
-    metadata_path = folder / "metadata.json"
-    if metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text())
-    normalize_enabled = bool(metadata.get("normalize", True))
-
-    coord_min = coord_max = None
-    if normalize_enabled:
-        norm_base = resolve_relative_path(folder, args.reference_full_horizon_norm_dataset)
-        if norm_base is None:
-            raw_dataset_dir = metadata.get("dataset_dir")
-            norm_base = Path(raw_dataset_dir) if raw_dataset_dir else folder
-        norm_path = norm_base / args.reference_full_horizon_norm_file
-        if not norm_path.exists():
-            raise RuntimeError(f"Full-horizon normalization file does not exist: {norm_path}")
-        norm = np.load(norm_path)
-        coord_min = norm[0].astype(np.float32)
-        coord_max = norm[1].astype(np.float32)
-
-    indices = np.arange(len(lengths), dtype=np.int64)
-    if args.reference_split not in [None, "None", "none", "null"]:
-        split_path = folder / args.reference_split_dir / f"{args.reference_split}_idx.npy"
-        if not split_path.exists():
-            raise RuntimeError(f"Full-horizon reference split file does not exist: {split_path}")
-        indices = np.load(split_path).astype(np.int64)
-
-    size = len(lengths)
-    if indices.size and indices.max() >= size:
-        raise RuntimeError(
-            f"Full-horizon split index max={indices.max()} exceeds dataset length={size}."
-        )
-
-    mask = np.ones(size, dtype=bool)
-    mask &= bool_filter(load_optional_array(folder / "need_scene.npy"), args.reference_need_scene, size)
-    mask &= bool_filter(load_optional_array(folder / "need_pelvis_dir.npy"), args.reference_need_pelvis_dir, size)
-    mask &= bool_filter(load_optional_array(folder / "need_hand_goal.npy"), args.reference_need_hand_goal, size)
-    mask &= bool_filter(load_optional_array(folder / "need_pi.npy"), args.reference_need_pi, size)
-    if args.reference_text_contains:
-        query = str(args.reference_text_contains).lower()
-        text_mask = np.asarray([query in (normalize_label(item) or "").lower() for item in texts], dtype=bool)
-        mask &= text_mask
-    indices = np.intersect1d(indices, np.flatnonzero(mask), assume_unique=False)
-    if indices.size == 0:
-        raise RuntimeError("No full-horizon GT reference clips matched the filters.")
-
-    max_samples = int(args.reference_max_samples)
-    if max_samples > 0 and indices.size > max_samples:
-        rng = np.random.default_rng(args.reference_sample_seed if args.reference_sample_seed is not None else args.seed)
-        indices = rng.choice(indices, size=max_samples, replace=False)
-
-    samples = []
-    for idx in progress_iter(
-        indices,
-        desc="Load full-horizon GT",
-        enabled=args.show_progress,
-        total=len(indices),
-    ):
-        seq_len = int(lengths[idx])
-        clip = np.asarray(motion[idx, :seq_len], dtype=np.float32).reshape(seq_len, -1, 3)
-        if normalize_enabled:
-            clip = (clip + 1.0) * (coord_max - coord_min).reshape(1, 1, 3) / 2.0 + coord_min.reshape(1, 1, 3)
-        mat = np.asarray(mats[idx], dtype=np.float32)
-        clip = clip @ mat[:3, :3].T + mat[:3, 3].reshape(1, 1, 3)
-        samples.append(
-            MotionSample(
-                name=f"gt_full_{idx}",
-                source=str(folder),
-                joints=clip,
-                label=normalize_label(texts[idx]) if idx < len(texts) else None,
-                condition_id=f"gt_full_{idx}",
-            )
-        )
-    return samples
-
-
 def load_optional_array(path: Path) -> Optional[np.ndarray]:
     return np.load(path, mmap_mode="r") if path.exists() else None
 
@@ -816,7 +723,6 @@ def sample_pair_id(sample: MotionSample) -> Optional[str]:
     fields = [sample.condition_id, sample.name, sample.source]
     patterns = (
         r"idx[-_](\d+)",
-        r"gt_full_(\d+)",
         r"source[_-]?index[-_=](\d+)",
     )
     for field in fields:
@@ -1199,36 +1105,6 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         help="LINGO dataset folder used to auto-slice GT reference clips.",
     )
     parser.add_argument(
-        "--reference-full-horizon-dataset",
-        default=config_default(config, "reference_full_horizon_dataset", None),
-        help="Full-horizon dataset folder used as GT reference, e.g. full_horizon_t120_s3.",
-    )
-    parser.add_argument(
-        "--reference-full-horizon-motion-file",
-        default=config_default(config, "reference_full_horizon_motion_file", "human_motion.npy"),
-    )
-    parser.add_argument(
-        "--reference-full-horizon-length-file",
-        default=config_default(config, "reference_full_horizon_length_file", "length.npy"),
-    )
-    parser.add_argument(
-        "--reference-full-horizon-mat-file",
-        default=config_default(config, "reference_full_horizon_mat_file", "mat.npy"),
-    )
-    parser.add_argument(
-        "--reference-full-horizon-text-file",
-        default=config_default(config, "reference_full_horizon_text_file", "text.pkl"),
-    )
-    parser.add_argument(
-        "--reference-full-horizon-norm-file",
-        default=config_default(config, "reference_full_horizon_norm_file", "norm_inter_and_loco__16frames.npy"),
-    )
-    parser.add_argument(
-        "--reference-full-horizon-norm-dataset",
-        default=config_default(config, "reference_full_horizon_norm_dataset", None),
-        help="Dataset folder containing the normalization file. Defaults to metadata.json dataset_dir.",
-    )
-    parser.add_argument(
         "--reference-motion-dict",
         default=config_default(
             config,
@@ -1241,7 +1117,7 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--reference-split-dataset",
         default=config_default(config, "reference_split_dataset", None),
-        help="Dataset folder that owns the split files. Use this for full-horizon splits mapped to raw GT.",
+        help="Dataset folder that owns the split files.",
     )
     parser.add_argument("--reference-split-dir", default=config_default(config, "reference_split_dir", "splits"))
     parser.add_argument(
@@ -1335,9 +1211,7 @@ def main() -> None:
     reference = []
     if args.reference:
         reference.extend(load_samples(args.reference, args, desc="Load reference"))
-    if args.reference_full_horizon_dataset:
-        reference.extend(load_reference_full_horizon_dataset(args))
-    elif args.reference_dataset:
+    if args.reference_dataset:
         reference.extend(load_reference_dataset(args))
     reference = reference or None
 

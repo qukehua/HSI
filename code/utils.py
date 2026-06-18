@@ -255,7 +255,14 @@ def init_model(model_cfg, device, eval, load_state_dict=False, need_ddp=True):
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], broadcast_buffers=False,
                                                               find_unused_parameters=True)
         if load_state_dict:
-            model.module.load_state_dict(torch.load(model_cfg.ckpt))
+            target_model = model.module if hasattr(model, "module") else model
+            map_location = torch.device(f"cuda:{device}") if isinstance(device, int) and torch.cuda.is_available() else device
+            state_dict = torch.load(model_cfg.ckpt, map_location=map_location)
+            key_list = [key for key in state_dict.keys()]
+            for old_key in key_list:
+                new_key = old_key.replace('module.', '')
+                state_dict[new_key] = state_dict.pop(old_key)
+            target_model.load_state_dict(state_dict)
             model.train()
 
     return model

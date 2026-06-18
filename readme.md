@@ -75,24 +75,14 @@ Navigate to the `code` directory:
 cd code
 ```
 
-Creat train, validation, and test dataset:
+Create the autoregressive window dataset:
 
 ```bash
-python preprocess_full_horizon_dataset.py \
-  --dataset-dir ../dataset_window \
-  --output-dir ../dataset_full \
-  --t-max 120 \
-  --step 3 \
-  --long-policy truncate \
-  --split-mode scene
-
-
-python create_dataset_splits.py \
-  --dataset-dir ../dataset_full \
-  --format auto \
-  --split-mode scene
-
-
+python preprocess_window_dataset.py \
+  --dataset-dir ../dataset/lingo \
+  --output-dir ../dataset/lingo/window_t16_s3 \
+  --window-size 16 \
+  --step 3
 ```
 To start training the model, run the training script from the command line:
 

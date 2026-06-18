@@ -64,6 +64,8 @@ def test_unet_object_switch_allows_missing_object_inputs():
     assert pred["object_motion"].shape == (x.shape[0], x.shape[1], 9)
     assert pred["object_motion"][1].abs().max().item() == 0.0
     assert pred["end_logits"].shape == x.shape[:2]
+    assert pred["completion_logits"].shape == x.shape[:1]
+    assert pred["completion_prob"].shape == x.shape[:1]
 
 
 def test_mask_and_upsample_utilities():

@@ -6,6 +6,7 @@ hosi_body:
   dropout_p: 0.1
   nb_voxels: ${dataset.nb_voxels}
   free_p: 0.1
+  architecture: global_to_local
   dim_input: ${times:${dataset.nb_joints},3}
   dim_output: ${times:${dataset.nb_joints},3}
   scene_type: ${scene_type}
