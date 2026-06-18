@@ -228,6 +228,7 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
             stand_start_idx_list = [100]
             sample_item = sampler_body.dataset.__getitem__(stand_start_idx_list[0])
             joints, mat = sample_item[0], sample_item[1]
+            init_length = int(sample_item[12]) if len(sample_item) > 12 else joints.shape[0]
             joints = torch.from_numpy(joints).float().reshape(1, -1, cfg.dataset.nb_joints*3)
             mat = torch.from_numpy(mat).float().reshape(1, 4, 4)
 
@@ -243,11 +244,21 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
             points_orig = points_orig.reshape(cfg.batch_size, cfg.max_window_size, cfg.dataset.nb_joints, 3) @ mat[0, :3, :3].t()
             points_orig = points_orig.reshape(cfg.batch_size, cfg.max_window_size, cfg.dataset.nb_joints*3)
 
-            translation_shift = points_orig[:, [-cfg.auto_regre_num], :3] - cond['start_location']
+            prefix_len = min(cfg.auto_regre_num, init_length)
+            prefix_start = max(init_length - prefix_len, 0)
+            init_prefix = points_orig[:, prefix_start:init_length].clone()
+            if init_prefix.shape[1] < cfg.auto_regre_num:
+                init_prefix = init_prefix[:, :1].repeat(1, cfg.auto_regre_num, 1)
+
+            translation_shift = init_prefix[:, [0], :3] - cond['start_location']
             translation_shift[0, 0, 1] = 0.
             points_orig = points_orig.reshape(cfg.batch_size, -1, cfg.dataset.nb_joints, 3)
             points_orig[:, :, :] -= translation_shift
             points_orig = points_orig.reshape(cfg.batch_size, -1, 3*cfg.dataset.nb_joints)
+            init_prefix = init_prefix.reshape(cfg.batch_size, -1, cfg.dataset.nb_joints, 3)
+            init_prefix[:, :, :] -= translation_shift
+            init_prefix = init_prefix.reshape(cfg.batch_size, -1, 3*cfg.dataset.nb_joints)
+            points_orig[:, -cfg.auto_regre_num:] = init_prefix
         else:
             points_orig = torch.from_numpy(points_all[-1].reshape(cfg.batch_size, -1, cfg.dataset.nb_joints*3)).to(cfg.device)
 
