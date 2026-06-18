@@ -1,9 +1,11 @@
 import argparse
 import csv
+import json
 import pickle as pkl
 from pathlib import Path
 
 import numpy as np
+from tqdm.auto import tqdm
 
 
 def load_pickle(path):
@@ -40,6 +42,75 @@ def make_segment(scene_name, text, start_location, end_location, hand_location, 
     }
 
 
+MANIFEST_FIELDS = [
+    "file",
+    "source_index",
+    "granularity",
+    "scene_name",
+    "source_action_text",
+    "segment_texts",
+    "num_segments",
+    "prepend_walk_applied",
+    "episode_num_per_segment",
+    "sampled_action_frames",
+    "max_padded_frames",
+    "sample_step",
+    "raw_frame_start",
+    "raw_frame_end",
+    "raw_frame_length",
+    "original_lingo_action_id",
+    "is_truncated",
+    "start_location",
+    "end_location",
+    "hand_location",
+]
+
+
+def build_manifest_row(
+    file_name,
+    src_idx,
+    scene_name,
+    source_action_text,
+    data,
+    prepend_walk_applied,
+    sampled_action_frames,
+    max_padded_frames,
+    sample_step,
+    raw_frame_start,
+    raw_frame_end,
+    original_lingo_action_id,
+    start_location,
+    end_location,
+    hand_location,
+    episode_num,
+):
+    raw_frame_length = int(raw_frame_end - raw_frame_start)
+    raw_sampled_frames = (raw_frame_length + sample_step - 1) // sample_step
+    segment_texts = " | ".join(seg["text"] for seg in data)
+    return {
+        "file": file_name,
+        "source_index": src_idx,
+        "granularity": "full_action",
+        "scene_name": scene_name,
+        "source_action_text": source_action_text,
+        "segment_texts": segment_texts,
+        "num_segments": len(data),
+        "prepend_walk_applied": prepend_walk_applied,
+        "episode_num_per_segment": int(episode_num),
+        "sampled_action_frames": int(sampled_action_frames),
+        "max_padded_frames": int(max_padded_frames),
+        "sample_step": int(sample_step),
+        "raw_frame_start": int(raw_frame_start),
+        "raw_frame_end": int(raw_frame_end),
+        "raw_frame_length": raw_frame_length,
+        "original_lingo_action_id": int(original_lingo_action_id),
+        "is_truncated": bool(raw_sampled_frames > max_padded_frames),
+        "start_location": start_location.tolist(),
+        "end_location": end_location.tolist(),
+        "hand_location": hand_location.tolist(),
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Export sample.py input pkl files from a full-horizon dataset split."
@@ -63,6 +134,15 @@ def parse_args():
         help="Export [walk, text] two-segment inputs instead of a single text segment.",
     )
     return parser.parse_args()
+
+
+def load_dataset_metadata(dataset_dir):
+    metadata_path = dataset_dir / "metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, encoding="utf-8") as f:
+            metadata = json.load(f)
+        return int(metadata.get("t_max", 120)), int(metadata.get("step", 3))
+    return 120, 3
 
 
 def main():
@@ -89,12 +169,18 @@ def main():
     pelvis_goals = np.load(dataset_dir / "pelvis_goal.npy", mmap_mode="r")
     hand_goals = np.load(dataset_dir / "hand_goal.npy", mmap_mode="r")
     lengths = np.load(dataset_dir / "length.npy", mmap_mode="r")
+    raw_start = np.load(dataset_dir / "raw_start_idx.npy", mmap_mode="r")
+    raw_end = np.load(dataset_dir / "raw_end_idx.npy", mmap_mode="r")
+    source_index = np.load(dataset_dir / "source_index.npy", mmap_mode="r")
+    max_padded_frames, sample_step = load_dataset_metadata(dataset_dir)
 
     prefix = args.prefix or args.split
     manifest_path = output_dir / f"{prefix}_manifest.csv"
     rows = []
 
-    for out_idx, src_idx in enumerate(indices):
+    for out_idx, src_idx in enumerate(
+        tqdm(indices, desc=f"Export {args.split}", unit="sample")
+    ):
         src_idx = int(src_idx)
         scene_name = str(scene_names[src_idx])
         text = first_text(texts[src_idx])
@@ -105,8 +191,9 @@ def main():
         end_location = local_to_global(pelvis_goals[src_idx], mat)
         end_location[1] = 0.0
         hand_location = local_to_global(hand_goals[src_idx], mat)
+        prepend_walk_applied = bool(args.prepend_walk and text.strip().lower() != "walk")
 
-        if args.prepend_walk and text.strip().lower() != "walk":
+        if prepend_walk_applied:
             seg_num = 2
             data = [
                 make_segment(
@@ -145,22 +232,28 @@ def main():
         file_name = f"{prefix}-{out_idx:05d}__idx-{src_idx}.pkl"
         save_pickle(data, output_dir / file_name)
         rows.append(
-            {
-                "file": file_name,
-                "source_index": src_idx,
-                "scene_name": scene_name,
-                "text": text,
-                "length": int(lengths[src_idx]),
-                "seg_num": seg_num,
-                "episode_num": int(args.episode_num),
-                "start_location": start_location.tolist(),
-                "end_location": end_location.tolist(),
-                "hand_location": hand_location.tolist(),
-            }
+            build_manifest_row(
+                file_name=file_name,
+                src_idx=src_idx,
+                scene_name=scene_name,
+                source_action_text=text,
+                data=data,
+                prepend_walk_applied=prepend_walk_applied,
+                sampled_action_frames=lengths[src_idx],
+                max_padded_frames=max_padded_frames,
+                sample_step=sample_step,
+                raw_frame_start=raw_start[src_idx],
+                raw_frame_end=raw_end[src_idx],
+                original_lingo_action_id=source_index[src_idx],
+                start_location=start_location,
+                end_location=end_location,
+                hand_location=hand_location,
+                episode_num=args.episode_num,
+            )
         )
 
     with open(manifest_path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else ["file"])
+        writer = csv.DictWriter(f, fieldnames=MANIFEST_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
