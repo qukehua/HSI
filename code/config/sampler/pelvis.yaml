@@ -11,6 +11,10 @@ pelvis:
   beta_schedule_s: 0.008
   beta_start: 0.0001
   beta_end: 0.02
+  clip_denoised: false
+  clip_denoised_min: -1.5
+  clip_denoised_max: 1.5
+  debug_sampling: false
   motion_len: ${motion_len}
   scene_type: ${scene_type}
   use_aux_losses: false

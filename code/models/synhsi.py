@@ -30,6 +30,10 @@ class Sampler:
         self.beta_start = kwargs.get('beta_start', 0.0001)
         self.beta_end = kwargs.get('beta_end', 0.02)
         self.beta_schedule_s = kwargs.get('beta_schedule_s', 0.008)
+        self.clip_denoised = kwargs.get('clip_denoised', False)
+        self.clip_denoised_min = kwargs.get('clip_denoised_min', -1.5)
+        self.clip_denoised_max = kwargs.get('clip_denoised_max', 1.5)
+        self.debug_sampling = kwargs.get('debug_sampling', False)
         self.get_scheduler()
 
     def set_dataset_and_model(self, dataset, model):
@@ -61,6 +65,8 @@ class Sampler:
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
         self.posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+        self.posterior_mean_coef1 = betas * torch.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod)
+        self.posterior_mean_coef2 = (1. - alphas_cumprod_prev) * torch.sqrt(alphas) / (1. - alphas_cumprod)
         self.betas = betas
 
     def q_sample(self, x_start, t, noise):
@@ -342,9 +348,28 @@ class Sampler:
         else:
             occ = None
 
-        model_mean = sqrt_recip_alphas_t * (
-                x - betas_t * model(x, occ, t, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi) / sqrt_one_minus_alphas_cumprod_t
-        )
+        predicted_noise = model(x, occ, t, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi)
+        if self.debug_sampling and (t_index >= self.timesteps - 3 or t_index in (90, 50, 10, 0)):
+            print(
+                "sample_debug",
+                f"t={t_index}",
+                f"x_abs_max={x.detach().abs().max().item():.6f}",
+                f"eps_abs_max={predicted_noise.detach().abs().max().item():.6f}",
+                f"x_minus_eps_abs_max={(x - predicted_noise).detach().abs().max().item():.6f}",
+            )
+
+        if self.clip_denoised:
+            sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x.shape)
+            pred_x0 = (x - sqrt_one_minus_alphas_cumprod_t * predicted_noise) / sqrt_alphas_cumprod_t.clamp_min(1e-8)
+            pred_x0 = pred_x0.clamp(self.clip_denoised_min, self.clip_denoised_max)
+            model_mean = (
+                extract(self.posterior_mean_coef1, t, x.shape) * pred_x0
+                + extract(self.posterior_mean_coef2, t, x.shape) * x
+            )
+        else:
+            model_mean = sqrt_recip_alphas_t * (
+                    x - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t
+            )
 
         if t_index == 0:
             return model_mean, occ
