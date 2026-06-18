@@ -226,9 +226,23 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
 
         if seg_id == 0:
             stand_start_idx_list = [100]
-            sample_item = sampler_body.dataset.__getitem__(stand_start_idx_list[0])
+            stand_idx = stand_start_idx_list[0]
+            sample_item = sampler_body.dataset.__getitem__(stand_idx)
             joints, mat = sample_item[0], sample_item[1]
-            init_length = int(sample_item[12]) if len(sample_item) > 12 else joints.shape[0]
+            init_length = None
+            dataset_indices = getattr(sampler_body.dataset, "indices", None)
+            source_idx = int(dataset_indices[stand_idx]) if dataset_indices is not None else stand_idx
+            if hasattr(sampler_body.dataset, "length"):
+                init_length = int(sampler_body.dataset.length[source_idx])
+            elif len(sample_item) > 13:
+                valid_mask = np.asarray(sample_item[13], dtype=bool)
+                if valid_mask.ndim == 1:
+                    init_length = int(valid_mask.sum())
+            elif len(sample_item) > 12 and np.isscalar(sample_item[12]):
+                init_length = int(sample_item[12])
+            if init_length is None:
+                init_length = joints.shape[0]
+            init_length = max(1, min(init_length, joints.shape[0]))
             joints = torch.from_numpy(joints).float().reshape(1, -1, cfg.dataset.nb_joints*3)
             mat = torch.from_numpy(mat).float().reshape(1, 4, 4)
 
