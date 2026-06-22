@@ -1,3 +1,33 @@
+# FlowHSI: Goal-Conditioned Flow Matching for Human-Scene Interaction Motion Synthesis
+
+This project is positioned around **Flow Matching**, not a general-purpose world model. The model learns a conditional velocity field that transports noisy motion windows into goal-satisfying human-scene interaction motions under scene, text, pelvis-goal, hand-goal, and progress conditions.
+
+## Pipeline
+
+1. **Windowed data construction**: `preprocess_window_dataset.py` converts LINGO/HSI sequences into fixed-size autoregressive windows with normalized human joints, valid-frame masks, text CLIP features, scene IDs, pelvis goals, hand goals, progress indicators, and terminal/completion labels.
+2. **Goal-conditioned Flow Matching training**: `train.py` samples a noisy interpolation time, builds the masked window condition, and trains the sampler/model to regress the velocity field from the noisy window toward the target motion.
+3. **Autoregressive ODE sampling**: `sample.py` starts each window from noise, keeps prefix frames fixed, and integrates the learned field with deterministic Flow Matching ODE steps. The default sampler uses 50 steps and can be ablated with fewer steps.
+4. **Scene-aware and goal-aware control**: language, occupancy grids, pelvis goals, hand goals, and progress tokens are injected as conditioning tokens. Locomotion segments can use A* path guidance, while future collision/contact/arrival guidance can be inserted as ODE correction terms.
+5. **Completion-aware rollout**: the completion head predicts whether the current window finishes the requested segment, making autoregressive stitching more stable than relying only on a noisy reverse diffusion trajectory.
+6. **SMPL-X conversion and evaluation**: generated joints are converted to SMPL-X for visualization, then evaluated with interaction, locomotion, reaching, penetration, and diversity-style metrics.
+
+## Why Flow Matching Fits This Task
+
+- **Faster window sampling**: autoregressive rollout samples one window at a time, so replacing a long DDPM reverse chain with Flow Matching ODE integration directly reduces per-window latency.
+- **Less stochastic jitter**: DDPM injects random noise at every reverse step, which can create visible shaking when windows are stitched. Flow Matching uses a deterministic velocity field during sampling, making autoregressive transitions smoother.
+- **More direct goal conditioning**: this task is not unconstrained random motion generation. Motions must satisfy scene, text, pelvis-goal, hand-goal, and progress conditions, and Flow Matching naturally learns the velocity from noise toward the conditioned target motion.
+- **Guidance-friendly sampling**: deterministic ODE updates make it straightforward to add collision, contact, or object-arrival correction terms during integration.
+- **More stable completion prediction**: the completion head is trained alongside the same smooth motion field, so segment stopping is less exposed to random reverse-process perturbations.
+
+## Related Flow Matching Work
+
+- [Flow Matching for Generative Modeling](https://arxiv.org/abs/2210.02747) introduced simulation-free CNF training by regressing vector fields over fixed probability paths, with efficient ODE sampling.
+- [Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport](https://arxiv.org/abs/2302.00482) developed conditional Flow Matching and OT-CFM, emphasizing stable regression objectives and deterministic flow-model inference.
+- [Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow](https://arxiv.org/abs/2209.03003) showed that straight transport paths can enable coarse, fast ODE sampling.
+- [Motion Flow Matching for Human Motion Synthesis and Editing](https://arxiv.org/abs/2312.08895) applied Flow Matching to human motion, reducing diffusion-style sampling complexity to very few steps while supporting editing through ODE trajectory rewriting.
+- [FlowMotion: Target-Predictive Flow Matching for Realistic Text-Driven Human Motion Generation](https://arxiv.org/abs/2504.01338) used conditional Flow Matching for text-driven human motion and emphasized reduced jitter, stability, realism, and computational efficiency.
+- [HY-Motion 1.0](https://arxiv.org/abs/2512.23464) scaled DiT-based Flow Matching for text-to-motion generation, showing the direction is viable for large motion-generation models.
+- [Riemannian Motion Generation](https://arxiv.org/abs/2603.15016) extended the idea to Riemannian Flow Matching for geometry-aware human motion representations.
 
 ## Prerequisites
 
@@ -40,11 +70,11 @@ To run the code, you need to have the following installed:
 
 2. **Inference**:
 
-    To synthesis human motions using our model, run
+    To synthesize human motions using our Flow Matching model, run
 
     ```sh
     cd code
-    python sample_lingo.py
+    python sample.py
     ```
 
 3. **Visualization in Blender**:
@@ -57,7 +87,7 @@ To run the code, you need to have the following installed:
 # Training and Evaluation
 ## Overview
 
-This README provides instructions on setting up and training our model using the LINGO dataset.
+This README provides instructions on setting up and training the FlowHSI model using the LINGO/HSI dataset.
 
 ## Prerequisites
 
@@ -87,10 +117,10 @@ python preprocess_window_dataset.py \
 To start training the model, run the training script from the command line:
 
 ```bash
-python train_model.py
+python train.py
 ```
 
-The training script will automatically load the dataset, set up the model, and commence training sessions using the configurations in `./code/config` folder.
+The training script loads the windowed dataset, instantiates the conditional Flow Matching sampler from `./code/config/sampler/pelvis.yaml`, and trains the model using the configurations in `./code/config`.
 
 ## Model Evaluation
 

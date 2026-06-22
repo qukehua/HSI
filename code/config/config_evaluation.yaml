@@ -2,7 +2,7 @@
 # CLI arguments override these values, for example:
 # python evaluation.py --config config/config_evaluation.yaml --metrics locomotion
 
-# Files, directories, or globs produced by sample_lingo.py or your own sampler.
+# Files, directories, or globs produced by sample.py or your own sampler.
 # Required. Fill this before running without --generated.
 generated: [/share/qkh/humoworld/results/outputs_test/**/*.pkl]
 # Randomly sample 200 idx; each idx keeps all repeats (e.g. 10) for 2000 total samples.
@@ -80,7 +80,7 @@ goal_file: null
 hand_joints: [20, 21, 25, 26, 27, 40, 49]
 reach_threshold: 0.20
 
-# SMPL-X conversion settings for sample_lingo.py output pkl files.
+# SMPL-X conversion settings for sample.py output pkl files.
 # Required when generated files contain transl/body_pose/global_orient.
 smpl_dir: /share/qkh/humoworld/smpl_models
 gender: male

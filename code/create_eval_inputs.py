@@ -102,7 +102,7 @@ def make_input(scene_name, command, start_location, end_location, hand_location,
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Create evaluation input pkl files for sample_lingo.py.")
+    parser = argparse.ArgumentParser(description="Create evaluation input pkl files for sample.py.")
     parser.add_argument("--dataset-dir", default="../dataset")
     parser.add_argument("--output-dir", default="../results/inputs_eval")
     parser.add_argument("--num-files", type=int, default=100)
