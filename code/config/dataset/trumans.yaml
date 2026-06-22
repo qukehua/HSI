@@ -1,0 +1,42 @@
+name: trumans
+_target_: datasets.trumans.TrumansDataset
+folder: ${oc.env:ROOT_DIR}/dataset/trumans/trumans
+device: ${device}
+batch_size: ${batch_size}
+step: 3
+nb_voxels: [32, 32, 32]
+mesh_grid: [-0.6, 0.6, 0.1, 1.2, -0.6, 0.6]
+vis: ${vis}
+start_type: ${start_type}
+test_scene_name: None
+train: ${train}
+load_language: ${load_language}
+load_scene: ${load_scene}
+load_hand_goal: ${load_hand_goal}
+load_pelvis_goal: ${load_pelvis_goal}
+load_object: ${load_object}
+use_pi: ${use_pi}
+max_window_size: ${max_window_size}
+seq_len: ${max_window_size}
+split: null
+split_dir: splits
+scene_mode: ${scene_mode}
+
+# TRUMANS official raw arrays use idx_start.npy as window starts.
+norm_file: norm.npy
+norm_key: null
+normalize: true
+split_seed: 42
+train_ratio: 0.8
+val_ratio: 0.1
+test_ratio: 0.1
+max_samples: 0
+
+# Object conditions: object_motion is translation + 6D rotation, object_points
+# are fixed-size point samples from trumans/Object/*.npy.
+object_num_points: 512
+normalize_object_motion: true
+
+joints_ind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+nb_joints: 24
+language_feature_dim: 10

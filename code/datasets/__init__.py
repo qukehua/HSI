@@ -1,1 +1,1 @@
-__all__ = ['lingo']
+__all__ = ['lingo', 'trumans']

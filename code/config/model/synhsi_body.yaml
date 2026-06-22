@@ -22,5 +22,5 @@ synhsi_body:
   scene_query_coord_scale: 1.0
   phase_dim: 32
   contact_dim: 6
-  language_feature_dim: 768
+  language_feature_dim: ${dataset.language_feature_dim}
   ckpt: ${ckpt_path}

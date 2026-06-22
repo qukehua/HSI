@@ -87,7 +87,7 @@ To run the code, you need to have the following installed:
 # Training and Evaluation
 ## Overview
 
-This README provides instructions on setting up and training the FlowHSI model using the LINGO/HSI dataset.
+This README provides instructions on setting up and training the FlowHSI model with either the LINGO/HSI window dataset or the TRUMANS raw dataset.
 
 ## Prerequisites
 
@@ -105,6 +105,8 @@ Navigate to the `code` directory:
 cd code
 ```
 
+### LINGO / HSI
+
 Create the autoregressive window dataset:
 
 ```bash
@@ -114,13 +116,50 @@ python preprocess_window_dataset.py \
   --window-size 16 \
   --step 3
 ```
-To start training the model, run the training script from the command line:
+
+Train with the LINGO dataloader:
 
 ```bash
-python train.py
+python train.py --config-name config_train \
+  dataset=lingo \
+  dataset.folder=../dataset/lingo/window_t16_s3 \
+  dataset.scene_source_dir=../dataset/lingo
 ```
 
-The training script loads the windowed dataset, instantiates the conditional Flow Matching sampler from `./code/config/sampler/pelvis.yaml`, and trains the model using the configurations in `./code/config`.
+The LINGO setting uses `code/config/dataset/lingo.yaml`, with 28 joints and 768-D CLIP text features.
+
+### TRUMANS
+
+Place the TRUMANS official files under `../dataset/trumans/trumans`, including:
+
+```text
+human_joints.npy
+human_orient.npy
+action_label.npy
+idx_start.npy
+scene_flag.npy
+object_flag.npy
+object_mat.npy
+Object/
+Scene/
+```
+
+Train with the TRUMANS dataloader:
+
+```bash
+python train.py --config-name config_train_trumans
+```
+
+If your TRUMANS folder is elsewhere, override the dataset path:
+
+```bash
+python train.py --config-name config_train_trumans \
+  dataset.folder=/path/to/trumans/trumans
+```
+
+The TRUMANS setting uses `code/config/dataset/trumans.yaml`, with 24 joints, 10-D action labels, and object conditions from `object_flag.npy`, `object_mat.npy`, and `Object/*.npy`.
+
+The training script instantiates the dataloader from the selected dataset config, builds the conditional Flow Matching sampler from `./code/config/sampler/pelvis.yaml`, and trains the model using the configurations in `./code/config`.
 
 ## Model Evaluation
 

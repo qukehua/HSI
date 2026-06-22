@@ -1,0 +1,71 @@
+defaults:
+  - dataset: trumans
+  - guidance:
+      - pelvis
+  - model:
+      - synhsi_body
+  - sampler:
+      - pelvis
+  - _self_
+
+exp_name: train_fm_trumans
+train: true
+scene_mode: test
+load_state_dict: false
+batch_size: 256
+lr: 0.0001
+use_lr_decay: true
+lr_decay_gamma: 0.95
+lr_decay_step_size: 50
+epochs: 1000
+device: cuda:0
+ckpt_name: None
+use_tensorboard: true
+use_wandb: true
+wandb_project: HSI-ours
+wandb_entity: null
+wandb_run_name: ${exp_name}
+wandb_mode: online
+log_interval: 10
+ckpt_interval: 50
+use_validation: true
+val_split: val
+val_interval: 1
+val_batch_size: ${batch_size}
+
+exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
+smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
+
+num_gpus: 1
+num_workers: 0
+scene_type: occ_two
+max_window_size: 16
+motion_len: 100000
+vis: false
+start_type: stand
+
+load_language: true
+load_scene: true
+use_pi: false
+load_hand_goal: false
+load_pelvis_goal: true
+load_object: true
+auto_regre_num: 2
+
+use_aux_losses: false
+completion_pos_weight: 32.0
+aux_loss_weights:
+  pelvis_traj: 0
+  duration: 0
+  valid_mask: 0
+  completion: 0.2
+  smoothness: 0
+
+dataset:
+  split: train
+
+ckpt_path: None
+
+hydra:
+  run:
+    dir: ${exp_dir}

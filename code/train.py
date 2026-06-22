@@ -16,6 +16,7 @@ os.environ['NCCL_IB_DISABLE'] = '0'
 
 import torch
 import numpy as np
+import hydra
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
@@ -23,7 +24,6 @@ from torch.optim import Adam
 from utils import *
 from constants import *
 from torch.utils.tensorboard import SummaryWriter
-from datasets.lingo import LingoDataset
 from tqdm.auto import tqdm
 
 
@@ -145,10 +145,20 @@ def init_wandb(cfg, rank):
 def get_split_subset(dataset, dataset_cfg, split_name):
     if split_name in [None, 'None', 'none', 'null']:
         return dataset
+    if hasattr(dataset, "get_split_indices"):
+        return Subset(dataset, dataset.get_split_indices(split_name))
     split_dir = dataset_cfg.get('split_dir', 'splits')
     split_path = os.path.join(dataset_cfg.folder, split_dir, f'{split_name}_idx.npy')
     split_idx = np.load(split_path).astype(np.int64)
     return Subset(dataset, split_idx)
+
+
+def build_dataset(dataset_cfg):
+    cfg_dict = OmegaConf.to_container(dataset_cfg, resolve=True)
+    target = cfg_dict.pop("_target_", "datasets.lingo.LingoDataset")
+    cfg_dict.pop("name", None)
+    dataset_cls = hydra.utils.get_class(target)
+    return dataset_cls(**cfg_dict)
 
 
 def build_lr_scheduler(optimizer, cfg):
@@ -161,17 +171,24 @@ def build_lr_scheduler(optimizer, cfg):
 
 def move_lingo_batch(batch, device):
     completion_label = None
+    extra = {}
     if len(batch) == 15:
         joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present = batch
-    else:
+    elif len(batch) == 16:
         joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label = batch
+    else:
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label, extra = batch
+    extra = {
+        key: value.to(device) if torch.is_tensor(value) else value
+        for key, value in (extra or {}).items()
+    }
     return joints.to(device), \
            mat.to(device), scene_flag.to(device), \
            text_clip_embedding.to(device), \
            pelvis_goal.to(device), hand_goal.to(device), \
            is_pick.to(device), need_scene.to(device), need_pelvis_dir.to(device), pi.to(device), \
            need_pi.to(device), is_loco.to(device), length.to(device), valid_mask.to(device), object_present.to(device), \
-           None if completion_label is None else completion_label.to(device)
+           None if completion_label is None else completion_label.to(device), extra
 
 
 @torch.no_grad()
@@ -182,7 +199,7 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
 
     progress = tqdm(dataloader, desc=f"Val {epoch}", disable=not show_progress, leave=False)
     for batch in progress:
-        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label = move_lingo_batch(batch, device)
+        joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label, extra = move_lingo_batch(batch, device)
         batch_size = joints.shape[0]
         t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
         mask, _, _ = get_mask(joints, -1, p=1., fixed_frame=cfg.auto_regre_num)
@@ -191,6 +208,9 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
             text_clip_embedding, pelvis_goal, hand_goal,
             is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
             length=length, valid_mask=valid_mask, completion_label=completion_label, object_present=object_present,
+            object_motion=extra.get("object_motion"),
+            object_points=extra.get("object_points"),
+            object_goal=extra.get("object_goal"),
             return_loss_dict=True,
         )
         update_loss_totals(total_losses, loss, batch_size)
@@ -236,7 +256,7 @@ def train_ddp(rank, world_size, cfg):
     val_split = cfg.get('val_split', 'val')
     dataset_cfg = OmegaConf.create(OmegaConf.to_container(cfg.dataset, resolve=True))
     dataset_cfg.split = None
-    synhsi_dataset = LingoDataset(**dataset_cfg)
+    synhsi_dataset = build_dataset(dataset_cfg)
     train_dataset = get_split_subset(synhsi_dataset, dataset_cfg, train_split)
     val_dataset = get_split_subset(synhsi_dataset, dataset_cfg, val_split) if cfg.get('use_validation', True) else None
 
@@ -285,7 +305,7 @@ def train_ddp(rank, world_size, cfg):
             global_step = epoch * len(dataloader) + step
             optimizer.zero_grad()
 
-            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label = move_lingo_batch(batch, device)
+            joints, mat, scene_flag, text_clip_embedding, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco, length, valid_mask, object_present, completion_label, extra = move_lingo_batch(batch, device)
 
             batch_size = joints.shape[0]
             t = torch.randint(0, trainer.timesteps, (batch_size,), device=device).long()
@@ -297,6 +317,9 @@ def train_ddp(rank, world_size, cfg):
                 text_clip_embedding, pelvis_goal, hand_goal,
                 is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
                 length=length, valid_mask=valid_mask, completion_label=completion_label, object_present=object_present,
+                object_motion=extra.get("object_motion"),
+                object_points=extra.get("object_points"),
+                object_goal=extra.get("object_goal"),
                 return_loss_dict=True,
             )
             loss = loss_dict["total"]
