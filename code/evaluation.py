@@ -433,9 +433,44 @@ def expand_inputs(paths: Sequence[str]) -> List[Path]:
     return sorted(set(path.resolve() for path in expanded))
 
 
-def load_samples(paths: Sequence[str], args: argparse.Namespace, desc: str = "Load samples") -> List[MotionSample]:
+def group_key_for_path(path: Path) -> str:
+    match = re.search(r"idx[-_](\d+)", path.as_posix())
+    if match is not None:
+        return f"idx-{match.group(1)}"
+    return path.parent.name
+
+
+def subsample_paths_by_group(
+    paths: Sequence[Path],
+    max_groups: int,
+    seed: Optional[int],
+) -> List[Path]:
+    if max_groups <= 0:
+        return list(paths)
+    groups: Dict[str, List[Path]] = {}
+    for path in paths:
+        groups.setdefault(group_key_for_path(path), []).append(path)
+    if len(groups) <= max_groups:
+        return list(paths)
+    rng = np.random.default_rng(seed)
+    selected_keys = rng.choice(list(groups.keys()), size=max_groups, replace=False)
+    result: List[Path] = []
+    for key in selected_keys:
+        result.extend(sorted(groups[key]))
+    return result
+
+
+def load_samples(
+    paths: Sequence[str],
+    args: argparse.Namespace,
+    desc: str = "Load samples",
+    max_idx: Optional[int] = None,
+    sample_seed: Optional[int] = None,
+) -> List[MotionSample]:
     samples = []
     input_paths = expand_inputs(paths)
+    if max_idx is not None:
+        input_paths = subsample_paths_by_group(input_paths, int(max_idx), sample_seed)
     for path in progress_iter(input_paths, desc=desc, enabled=args.show_progress, total=len(input_paths)):
         samples.extend(load_motion_file(path, args))
     if not samples:
@@ -547,6 +582,73 @@ def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
     if not samples:
         raise RuntimeError("GT reference clips were found, but none could be loaded.")
     return samples
+
+
+def load_reference_clips_for_indices(
+    args: argparse.Namespace,
+    indices: Sequence[int],
+    desc: str = "Load paired GT",
+) -> List[MotionSample]:
+    folder = Path(args.reference_dataset)
+    if not folder.exists():
+        raise RuntimeError(f"Reference dataset folder does not exist: {folder}")
+
+    joints_path = folder / args.reference_joints_file
+    motion_dict_path = folder / args.reference_motion_dict
+    if not joints_path.exists():
+        raise RuntimeError(f"GT joints file does not exist: {joints_path}")
+    if not motion_dict_path.exists():
+        raise RuntimeError(f"Language motion dict does not exist: {motion_dict_path}")
+
+    joints_all = np.load(joints_path, mmap_mode="r", allow_pickle=True)
+    motion_dict = load_pickle(motion_dict_path)
+    start_idx = np.asarray(motion_dict["start_idx"], dtype=np.int64)
+    end_idx = np.asarray(motion_dict["end_idx"], dtype=np.int64)
+    text = motion_dict.get("text", [None] * len(start_idx))
+    expected_span = int(args.reference_window_size) * int(args.reference_step)
+
+    unique_indices = np.unique(np.asarray(indices, dtype=np.int64))
+    samples = []
+    for idx in progress_iter(unique_indices, desc=desc, enabled=args.show_progress, total=len(unique_indices)):
+        idx = int(idx)
+        if idx < 0 or idx >= len(start_idx):
+            continue
+        if int(end_idx[idx] - start_idx[idx]) != expected_span:
+            continue
+        start = int(start_idx[idx])
+        stop = start + expected_span
+        clip = np.asarray(joints_all[start:stop:int(args.reference_step)], dtype=np.float32)
+        if clip.shape[0] != int(args.reference_window_size):
+            continue
+        samples.append(
+            MotionSample(
+                name=f"gt_{idx}",
+                source=str(folder),
+                joints=clip,
+                label=normalize_label(text[idx]),
+                condition_id=f"gt_{idx}",
+            )
+        )
+    return samples
+
+
+def paired_reference_for_generated(
+    generated: Sequence[MotionSample],
+    reference: Optional[Sequence[MotionSample]],
+    args: argparse.Namespace,
+) -> Optional[Sequence[MotionSample]]:
+    if not args.reference_dataset:
+        return reference
+    pair_indices = sorted(
+        {
+            int(pair_id)
+            for sample in generated
+            if (pair_id := sample_pair_id(sample)) is not None
+        }
+    )
+    if not pair_indices:
+        return reference
+    return load_reference_clips_for_indices(args, pair_indices)
 
 
 def resample_motion(joints: np.ndarray, frames: int) -> np.ndarray:
@@ -723,6 +825,8 @@ def sample_pair_id(sample: MotionSample) -> Optional[str]:
     fields = [sample.condition_id, sample.name, sample.source]
     patterns = (
         r"idx[-_](\d+)",
+        r"gt_(\d+)",
+        r"gt_full_(\d+)",
         r"source[_-]?index[-_=](\d+)",
     )
     for field in fields:
@@ -1094,6 +1198,18 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         help="Generated pkl/npz/npy files, directories, or globs.",
     )
     parser.add_argument(
+        "--generated-max-idx",
+        type=int,
+        default=config_default(config, "generated_max_idx", 0),
+        help="Randomly subsample this many idx groups before loading. All repeats per idx are kept. 0 keeps all idx.",
+    )
+    parser.add_argument(
+        "--generated-sample-seed",
+        type=int,
+        default=config_default(config, "generated_sample_seed", None),
+        help="Random seed for generated subsampling. Defaults to --seed.",
+    )
+    parser.add_argument(
         "--reference",
         nargs="*",
         default=config_default(config, "reference", None),
@@ -1207,7 +1323,13 @@ def main() -> None:
     args.hand_joints = parse_ints(args.hand_joints)
     args.joints_ind = parse_ints(args.joints_ind)
 
-    generated = load_samples(args.generated, args, desc="Load generated")
+    generated = load_samples(
+        args.generated,
+        args,
+        desc="Load generated",
+        max_idx=args.generated_max_idx,
+        sample_seed=args.generated_sample_seed if args.generated_sample_seed is not None else args.seed,
+    )
     reference = []
     if args.reference:
         reference.extend(load_samples(args.reference, args, desc="Load reference"))
@@ -1224,7 +1346,8 @@ def main() -> None:
             results["interactive"] = {}
     if args.metrics in ("all", "paired"):
         try:
-            results["paired"] = paired_metrics(generated, reference, args)
+            paired_reference = paired_reference_for_generated(generated, reference, args)
+            results["paired"] = paired_metrics(generated, paired_reference, args)
         except Exception as exc:
             warnings.warn(f"Paired metrics skipped: {exc}")
             results["paired"] = {}

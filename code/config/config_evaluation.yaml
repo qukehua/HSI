@@ -4,7 +4,10 @@
 
 # Files, directories, or globs produced by sample_lingo.py or your own sampler.
 # Required. Fill this before running without --generated.
-generated: [/share/qkh/HSI/results/outputs/outputs_test/**/*.pkl]
+generated: [/share/qkh/humoworld/results/outputs_test/**/*.pkl]
+# Randomly sample 200 idx; each idx keeps all repeats (e.g. 10) for 2000 total samples.
+generated_max_idx: 200
+generated_sample_seed: 42
 
 # GT/reference motions or features for FID, Precision, Recall, and F1.
 # Leave empty when you only need diversity, locomotion, or reaching metrics.
@@ -13,7 +16,7 @@ reference: []
 # Optional: automatically slice GT clips from the LINGO window dataset as reference.
 # This reads human_joints_aligned.npy with mmap and cuts clips using
 # language_motion_dict start_idx/end_idx.
-reference_dataset: null
+reference_dataset: /share/qkh/dataset/lingo
 
 reference_motion_dict: language_motion_dict/language_motion_dict__inter_and_loco__16.pkl
 reference_joints_file: human_joints_aligned.npy
@@ -79,7 +82,7 @@ reach_threshold: 0.20
 
 # SMPL-X conversion settings for sample_lingo.py output pkl files.
 # Required when generated files contain transl/body_pose/global_orient.
-smpl_dir: ../smpl_models
+smpl_dir: /share/qkh/humoworld/smpl_models
 gender: male
 device: cuda
 smpl_batch_size: 256

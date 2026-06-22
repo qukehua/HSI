@@ -1,0 +1,16 @@
+# @package _global_
+# Blender demo / single-case visualization profile.
+
+scene_mode: visualization
+vis: true
+mm_sampling: false
+
+test_setting: demo-21
+input_path: ${oc.env:ROOT_DIR}/results/inputs/scene21/action0.pkl
+
+mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs_test
+mm_input_glob: "*.pkl"
+mm_output_dir: ${exp_dir}/outputs_test
+mm_num_repeats: 10
+mm_max_inputs: 0
+mm_skip_existing: true

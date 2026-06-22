@@ -8,16 +8,16 @@ defaults:
       - pelvis
   - _self_
 
-exp_name: train_ar
+exp_name: train_fm
 train: true
 scene_mode: auto
 load_state_dict: false
-batch_size: 12
+batch_size: 512
 lr: 0.0001
 use_lr_decay: true
 lr_decay_gamma: 0.95
 lr_decay_step_size: 50
-epochs: 500
+epochs: 1000
 device: cuda:0
 ckpt_name: None
 use_tensorboard: true
@@ -52,8 +52,18 @@ load_pelvis_goal: true
 load_object: false
 auto_regre_num: 2
 
+# Auxiliary loss switches and weights (passed to sampler.pelvis).
+use_aux_losses: false
+completion_pos_weight: 32.0
+aux_loss_weights:
+  pelvis_traj: 0
+  duration: 0
+  valid_mask: 0
+  completion: 0.2
+  smoothness: 0
+
 dataset:
-  split: null
+  split: train
 
 ckpt_path: None
 

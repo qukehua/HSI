@@ -207,7 +207,7 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
     return average_loss_totals(total_losses, total_count)
 
 
-@hydra.main(version_base=None, config_path="config", config_name="config_train_model")
+@hydra.main(version_base=None, config_path="config", config_name="config_train")
 def train(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     os.environ["MASTER_ADDR"] = "localhost"

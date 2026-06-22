@@ -8,10 +8,12 @@ defaults:
       - synhsi_body
   - sampler:
       - pelvis
+  # ONE SWITCH: vis (Blender demo) | test (batch evaluation)
+  # Edit the line below, or override from CLI:
+  #   python sample.py sampling_mode=test
+  - sampling_mode: test
 
 train: false
-# test/scene loads dataset/Scene; visualization/scene_vis loads dataset/Scene_vis.
-scene_mode: visualization
 device: cuda
 batch_size: 1
 interp_s: 3
@@ -22,7 +24,6 @@ completion_threshold: 0.7
 completion_min_step: 2
 completion_patience: 1
 
-vis: true
 start_type: stand
 
 repeat_time: 0
@@ -31,23 +32,9 @@ seg_len: 4 # episode
 
 speed: 0.8
 
-#visualization sampling
-test_setting: demo-21
 exp_dir: ${oc.env:ROOT_DIR}/results/
-ckpt_path: ${oc.env:ROOT_DIR}/results/train_ar/checkpoints/best_model.pth
-input_path: ${oc.env:ROOT_DIR}/results/inputs/scene21/action0.pkl
+ckpt_path: ${oc.env:ROOT_DIR}/results/train_fm/checkpoints/best_model.pth
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
-
-# Multi-modality evaluation sampling.
-# When enabled, sample_lingo.py reads all pkl files from mm_input_dir and
-# generates mm_num_repeats stochastic samples for each input.
-mm_sampling: False
-mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs_test
-mm_input_glob: "*.pkl"
-mm_output_dir: ${exp_dir}/outputs_test
-mm_num_repeats: 10
-mm_max_inputs: 0
-mm_skip_existing: true
 
 scene_type: occ_two
 
@@ -63,6 +50,15 @@ load_pelvis_goal: true
 load_object: false
 
 auto_regre_num: 2 # prefixed frames for each segment
+
+use_aux_losses: false
+completion_pos_weight: 32.0
+aux_loss_weights:
+  pelvis_traj: 0
+  duration: 0
+  valid_mask: 0
+  completion: 0.2
+  smoothness: 0
 
 num_gpus: 1
 num_workers: 0

@@ -18,11 +18,6 @@ pelvis:
   debug_sampling: false
   motion_len: ${motion_len}
   scene_type: ${scene_type}
-  use_aux_losses: true
-  completion_pos_weight: 32.0
-  aux_loss_weights:
-    pelvis_traj: 0
-    duration: 0
-    valid_mask: 0
-    completion: 0.2
-    smoothness: 0
+  use_aux_losses: ${use_aux_losses}
+  completion_pos_weight: ${completion_pos_weight}
+  aux_loss_weights: ${aux_loss_weights}

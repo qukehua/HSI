@@ -94,9 +94,14 @@ def create_window_splits(dataset_dir, output_dir, ratios, seed, motion_dict_rel_
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Create scene-disjoint window train/val/test splits for LINGO/HSI.")
-    parser.add_argument("--dataset-dir", default="../dataset")
+    parser.add_argument("--dataset-dir", default="/share/qkh/dataset/lingo")
     parser.add_argument("--motion-dict", default="language_motion_dict/language_motion_dict__inter_and_loco__16.pkl")
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument(
+        "--window-dir",
+        default="/share/qkh/dataset/lingo/window_t16_s3",
+        help="Optional preprocessed window dataset folder; scene splits are mirrored to window-dir/splits.",
+    )
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--test-ratio", type=float, default=0.1)
@@ -114,6 +119,16 @@ def main():
     ratios = ratios / ratios.sum()
 
     summary = create_window_splits(dataset_dir, output_dir, ratios, args.seed, args.motion_dict)
+
+    window_dir = Path(args.window_dir) if args.window_dir else None
+    if window_dir is not None and window_dir.exists():
+        window_split_dir = window_dir / "splits"
+        window_split_dir.mkdir(parents=True, exist_ok=True)
+        for split_name in ("train", "val", "test"):
+            src = output_dir / f"{split_name}_idx.npy"
+            if src.exists():
+                np.save(window_split_dir / f"{split_name}_idx.npy", np.load(src))
+        print(f"Mirrored window split indices to {window_split_dir}")
 
     with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
