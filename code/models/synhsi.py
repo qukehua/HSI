@@ -973,6 +973,7 @@ class Unet(nn.Module):
             cond_tokens.append(t_emb + object_emb)
 
         cond_tokens = [token.permute(1, 0, 2) for token in cond_tokens]
+        cond_token_count = sum(token.shape[0] for token in cond_tokens)
         state_input = self._pack_state_input(x, object_motion, batch_size, device)
         frame_tokens = state_input.permute(1, 0, 2)
         frame_tokens = self.embedding_input(frame_tokens) * math.sqrt(self.dim_model)
@@ -981,7 +982,7 @@ class Unet(nn.Module):
         tokens = self.positional_encoder(tokens)
         tokens = self.transformer(tokens)
 
-        frame_tokens = tokens[len(cond_tokens):].permute(1, 0, 2)
+        frame_tokens = tokens[cond_token_count:].permute(1, 0, 2)
         if self.architecture == "ar_transformer":
             human_motion = self.embedding_output(frame_tokens)
             if self.use_object:
