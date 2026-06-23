@@ -17,12 +17,12 @@ lr: 0.0001
 use_lr_decay: true
 lr_decay_gamma: 0.95
 lr_decay_step_size: 50
-epochs: 1000
+epochs: 500
 device: cuda:0
 ckpt_name: None
 use_tensorboard: true
 use_wandb: true
-wandb_project: HSI-ours
+wandb_project: HSI
 wandb_entity: null
 wandb_run_name: ${exp_name}
 wandb_mode: online
@@ -36,7 +36,7 @@ val_batch_size: ${batch_size}
 exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 
-num_gpus: 6
+num_gpus: 8
 num_workers: 0
 scene_type: occ_two
 max_window_size: 16
