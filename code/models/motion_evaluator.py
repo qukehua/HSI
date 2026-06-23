@@ -64,7 +64,12 @@ class TextConditionEncoder(nn.Module):
             nn.Linear(hidden_dim, embedding_dim),
         )
 
-    def forward(self, text: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        text: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
         if text.ndim == 2:
             pooled = text
         elif text.ndim == 3:
@@ -74,7 +79,8 @@ class TextConditionEncoder(nn.Module):
                 pooled = masked_mean(text, lengths)
         else:
             raise ValueError(f"Expected text shape [B, D] or [B, T, D], got {tuple(text.shape)}.")
-        return F.normalize(self.net(pooled), dim=-1)
+        embedding = self.net(pooled)
+        return F.normalize(embedding, dim=-1) if normalize else embedding
 
 
 class MotionSequenceEncoder(nn.Module):
@@ -112,7 +118,12 @@ class MotionSequenceEncoder(nn.Module):
             nn.Linear(hidden_dim, embedding_dim),
         )
 
-    def forward(self, motion: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        motion: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
         if motion.shape[-1] != self.motion_dim:
             raise ValueError(f"Expected motion dim {self.motion_dim}, got {motion.shape[-1]}.")
         features = canonicalize_motion(motion, lengths=lengths, root_joint=self.root_joint)
@@ -125,7 +136,8 @@ class MotionSequenceEncoder(nn.Module):
             _, hidden = self.gru(features)
         hidden = hidden.reshape(self.gru.num_layers, 2, motion.shape[0], self.gru.hidden_size)[-1]
         pooled = torch.cat([hidden[0], hidden[1]], dim=-1)
-        return F.normalize(self.output(pooled), dim=-1)
+        embedding = self.output(pooled)
+        return F.normalize(embedding, dim=-1) if normalize else embedding
 
 
 class MotionEvaluator(nn.Module):
@@ -168,11 +180,21 @@ class MotionEvaluator(nn.Module):
         )
         self.logit_scale = nn.Parameter(torch.tensor(math.log(1 / 0.07), dtype=torch.float32))
 
-    def encode_motion(self, motion: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.motion_encoder(motion, lengths)
+    def encode_motion(
+        self,
+        motion: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        return self.motion_encoder(motion, lengths, normalize=normalize)
 
-    def encode_text(self, text: torch.Tensor, lengths: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.text_encoder(text, lengths)
+    def encode_text(
+        self,
+        text: torch.Tensor,
+        lengths: Optional[torch.Tensor] = None,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        return self.text_encoder(text, lengths, normalize=normalize)
 
     def forward(
         self,

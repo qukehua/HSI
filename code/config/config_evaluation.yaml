@@ -63,6 +63,7 @@ precision_k: 3
 motion_evaluator_checkpoint: /share/qkh/humoworld/results/motion_evaluator_lingo/checkpoints/best_model.pth
 motion_evaluator_batch_size: 256
 motion_evaluator_device: null
+motion_evaluator_normalize_embeddings: false
 motion_evaluator_joints_ind: null
 
 # MPJPE requires generated samples and GT references to share an id such as

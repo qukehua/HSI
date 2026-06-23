@@ -949,7 +949,11 @@ def collect_evaluator_features(
                 padded[idx, : motion.shape[0]] = motion
             motion_tensor = torch.as_tensor(padded, dtype=torch.float32, device=device)
             length_tensor = torch.as_tensor(lengths, dtype=torch.long, device=device)
-            embedding = model.encode_motion(motion_tensor, length_tensor)
+            embedding = model.encode_motion(
+                motion_tensor,
+                length_tensor,
+                normalize=args.motion_evaluator_normalize_embeddings,
+            )
             features.append(embedding.detach().cpu().numpy())
 
     if not features:
@@ -1637,6 +1641,12 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         "--motion-evaluator-device",
         default=config_default(config, "motion_evaluator_device", None),
         help="Device for evaluator encoding. Defaults to --device.",
+    )
+    parser.add_argument(
+        "--motion-evaluator-normalize-embeddings",
+        type=parse_bool_or_none,
+        default=config_default(config, "motion_evaluator_normalize_embeddings", False),
+        help="Whether to L2-normalize evaluator embeddings before FID/diversity/MM.",
     )
     parser.add_argument(
         "--motion-evaluator-joints-ind",
