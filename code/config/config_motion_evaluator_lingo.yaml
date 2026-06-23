@@ -7,7 +7,7 @@ exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 
 device: cuda:0
 seed: 42
-batch_size: 256
+batch_size: 512
 val_batch_size: ${batch_size}
 num_workers: 0
 epochs: 100
@@ -42,8 +42,8 @@ train_split: train
 val_split: val
 
 dataset:
-  folder: ../dataset/lingo/window_t16_s3
-  scene_source_dir: ../dataset/lingo
+  folder: /share/qkh/dataset/lingo/window_t16_s3
+  scene_source_dir: /share/qkh/dataset/lingo
   split: null
 
 hydra:
