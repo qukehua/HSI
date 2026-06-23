@@ -4,7 +4,12 @@ import pickle as pkl
 from pathlib import Path
 
 import numpy as np
-from tqdm.auto import tqdm
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 
 def load_pickle(path):
@@ -181,7 +186,7 @@ def build_manifest_row(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Create inputs_test pkl files by randomly sampling window clips from a dataset split."
+        description="Create inputs_test pkl files by sampling unique text commands from a dataset split."
     )
     parser.add_argument("--dataset-dir", default="/share/qkh/dataset/lingo")
     parser.add_argument(
@@ -196,8 +201,14 @@ def parse_args():
     parser.add_argument(
         "--num-files",
         type=int,
-        default=200,
-        help="Randomly sample this many window indices from the split (0 = export all).",
+        default=None,
+        help="Deprecated alias for --num-texts. Kept for old commands.",
+    )
+    parser.add_argument(
+        "--num-texts",
+        type=int,
+        default=100,
+        help="Sample this many different source texts from the split (0 = export all unique texts).",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--window-size", type=int, default=16)
@@ -217,6 +228,30 @@ def parse_args():
     return parser.parse_args()
 
 
+def select_unique_text_indices(indices, motion_dict, num_texts, seed):
+    rng = np.random.default_rng(seed)
+    shuffled = np.asarray(indices, dtype=np.int64).copy()
+    rng.shuffle(shuffled)
+
+    text_to_indices = {}
+    for src_idx in shuffled:
+        text = first_text(motion_dict["text"][int(src_idx)])
+        text_to_indices.setdefault(text, []).append(int(src_idx))
+
+    texts = list(text_to_indices)
+    if num_texts > 0 and len(texts) > num_texts:
+        selected_texts = rng.choice(np.asarray(texts, dtype=object), size=num_texts, replace=False).tolist()
+    else:
+        selected_texts = texts
+
+    selected_indices = []
+    for text in selected_texts:
+        group = text_to_indices[text]
+        selected_indices.append(int(group[int(rng.integers(len(group)))]))
+    selected_indices = np.asarray(selected_indices, dtype=np.int64)
+    return selected_indices[np.argsort(selected_indices)], len(text_to_indices), len(selected_texts)
+
+
 def main():
     args = parse_args()
     dataset_dir = Path(args.dataset_dir)
@@ -230,16 +265,8 @@ def main():
             "Create it first with create_dataset_splits.py."
         )
 
-    indices = np.load(split_path).astype(np.int64)
-    if args.num_files > 0 and len(indices) > args.num_files:
-        rng = np.random.default_rng(args.seed)
-        indices = np.sort(rng.choice(indices, size=args.num_files, replace=False))
-
     motion_dict = load_pickle(dataset_dir / args.motion_dict)
-    joints = np.load(dataset_dir / args.joints_file, mmap_mode="r")
-    scene_names = load_pickle(dataset_dir / "scene_name.pkl")
-    root_start = np.load(dataset_dir / "start_idx.npy")
-    root_end = np.load(dataset_dir / "end_idx.npy")
+    indices = np.load(split_path).astype(np.int64)
 
     expected_span = int(args.window_size) * int(args.step)
     start_idx = np.asarray(motion_dict["start_idx"], dtype=np.int64)
@@ -250,6 +277,23 @@ def main():
         raise RuntimeError(
             f"No window clips matched span={expected_span} in split {args.split}."
         )
+
+    num_texts = args.num_texts
+    if args.num_files is not None:
+        num_texts = args.num_files
+    indices, available_texts, selected_texts = select_unique_text_indices(
+        indices, motion_dict, num_texts, args.seed
+    )
+    if num_texts > 0 and selected_texts < num_texts:
+        print(
+            f"Warning: split {args.split} only has {available_texts} unique texts after span filtering; "
+            f"exporting {selected_texts} files."
+        )
+
+    joints = np.load(dataset_dir / args.joints_file, mmap_mode="r")
+    scene_names = load_pickle(dataset_dir / "scene_name.pkl")
+    root_start = np.load(dataset_dir / "start_idx.npy")
+    root_end = np.load(dataset_dir / "end_idx.npy")
 
     prefix = args.prefix or args.split
     manifest_path = output_dir / f"{prefix}_manifest.csv"
