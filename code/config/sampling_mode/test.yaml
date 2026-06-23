@@ -1,6 +1,6 @@
 # @package _global_
 # Batch test sampling for evaluation profile.
-# For fair comparison with lingo, use the SAME inputs_test (from lingo export_split_inputs.py).
+# For fair comparison with lingo, use the SAME inputs_test (from create_eval_inputs.py).
 # Example: ln -sfn /share/qkh/lingo/results/inputs_test ${oc.env:ROOT_DIR}/results/inputs_test
 
 scene_mode: test
@@ -13,6 +13,6 @@ input_path: ${oc.env:ROOT_DIR}/results/inputs/scene21/action0.pkl
 mm_input_dir: ${oc.env:ROOT_DIR}/results/inputs_test
 mm_input_glob: "*.pkl"
 mm_output_dir: ${exp_dir}/outputs_test
-mm_num_repeats: 10
+mm_num_repeats: 30
 mm_max_inputs: 0
 mm_skip_existing: true

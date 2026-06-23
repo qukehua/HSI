@@ -5,7 +5,7 @@
 # Files, directories, or globs produced by sample.py or your own sampler.
 # Required. Fill this before running without --generated.
 generated: [/share/qkh/humoworld/results/outputs_test/**/*.pkl]
-# Randomly sample 200 idx; each idx keeps all repeats (e.g. 10) for 2000 total samples.
+# Randomly sample 200 idx; each idx keeps all repeats (30) for 6000 total samples.
 generated_max_idx: 200
 generated_sample_seed: 42
 
@@ -27,7 +27,7 @@ reference_split: test
 reference_split_dataset: null
 reference_split_dir: splits
 reference_split_source_index: null
-reference_max_samples: 5000
+reference_max_samples: 200
 reference_sample_seed: null
 reference_step: 3
 reference_window_size: 16
