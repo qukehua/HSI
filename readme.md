@@ -131,9 +131,7 @@ The LINGO setting uses `code/config/dataset/lingo.yaml`, with 28 joints and 768-
 Train a LINGO motion evaluator for evaluator-space FID/Diversity:
 
 ```bash
-python train_motion_evaluator.py --config-name config_motion_evaluator_lingo \
-  dataset.folder=../dataset/lingo/window_t16_s3 \
-  dataset.scene_source_dir=../dataset/lingo
+python train_motion_evaluator.py --config-name config_motion_evaluator_lingo
 ```
 
 ### TRUMANS

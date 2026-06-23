@@ -42,6 +42,8 @@ train_split: train
 val_split: val
 
 dataset:
+  folder: ../dataset/lingo/window_t16_s3
+  scene_source_dir: ../dataset/lingo
   split: null
 
 hydra:
