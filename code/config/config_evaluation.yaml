@@ -54,8 +54,8 @@ seed: 42
 # Otherwise set motion_evaluator_checkpoint to a trained evaluator checkpoint.
 feature_frames: 64
 feature_dim: 512
-diversity_pairs: 200
-multimodality_pairs: 100
+diversity_pairs: 300
+multimodality_pairs: 10
 precision_k: 3
 
 # Interactive metrics require a trained motion evaluator checkpoint.
