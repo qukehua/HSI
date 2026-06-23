@@ -1645,8 +1645,8 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--motion-evaluator-normalize-embeddings",
         type=parse_bool_or_none,
-        default=config_default(config, "motion_evaluator_normalize_embeddings", False),
-        help="Whether to L2-normalize evaluator embeddings before FID/diversity/MM.",
+        default=config_default(config, "motion_evaluator_normalize_embeddings", True),
+        help="Whether to L2-normalize evaluator embeddings before FID/diversity/MM. Keep true for contrastive evaluators.",
     )
     parser.add_argument(
         "--motion-evaluator-joints-ind",
