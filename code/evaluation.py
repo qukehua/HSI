@@ -55,6 +55,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "config_evalu
 _SCENE_PATH_CACHE: Dict[Tuple[str, Optional[str]], Optional[Path]] = {}
 _SCENE_OCC_CACHE: Dict[str, np.ndarray] = {}
 _DISTANCE_FIELD_CACHE: Dict[Tuple[str, Tuple[float, ...]], np.ndarray] = {}
+_OBJ_VERT_CACHE: Dict[str, np.ndarray] = {}
 
 
 def progress_iter(iterable, desc: str, enabled: bool = True, total: Optional[int] = None, leave: bool = False):
@@ -78,6 +79,7 @@ class MotionSample:
     source: str
     joints: Optional[np.ndarray] = None
     vertices: Optional[np.ndarray] = None
+    object_vertices: Optional[np.ndarray] = None
     features: Optional[np.ndarray] = None
     label: Optional[str] = None
     condition_id: Optional[str] = None
@@ -232,6 +234,19 @@ def ensure_motion_array(arr: np.ndarray) -> List[np.ndarray]:
     raise ValueError(f"Cannot interpret array with shape {arr.shape} as joints.")
 
 
+def ensure_object_array(arr: np.ndarray) -> List[np.ndarray]:
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.ndim == 4 and arr.shape[-1] == 3:
+        return [arr[i] for i in range(arr.shape[0])]
+    if arr.ndim == 3 and arr.shape[-1] == 3:
+        return [arr]
+    if arr.ndim == 2 and arr.shape[-1] == 3:
+        return [arr]
+    if arr.ndim == 2 and arr.shape[-1] % 3 == 0:
+        return [arr.reshape(arr.shape[0], arr.shape[1] // 3, 3)]
+    raise ValueError(f"Cannot interpret array with shape {arr.shape} as object vertices.")
+
+
 def find_first_key(data: Dict, names: Sequence[str]):
     for name in names:
         if name in data:
@@ -249,8 +264,100 @@ def maybe_feature_array(arr: np.ndarray) -> Optional[np.ndarray]:
 
 
 def load_pickle(path: Path):
-    with path.open("rb") as f:
-        return pkl.load(f)
+    try:
+        with path.open("rb") as f:
+            return pkl.load(f)
+    except ModuleNotFoundError as exc:
+        if exc.name != "joblib":
+            raise
+        try:
+            import joblib
+        except ModuleNotFoundError as joblib_exc:
+            raise ModuleNotFoundError(
+                f"{path} appears to require joblib. Install joblib or convert the file to a standard pickle."
+            ) from joblib_exc
+        return joblib.load(path)
+
+
+def load_obj_vertices(path: Path) -> np.ndarray:
+    key = stable_path_key(path)
+    if key in _OBJ_VERT_CACHE:
+        return _OBJ_VERT_CACHE[key]
+    vertices = []
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if line.startswith("v "):
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    if not vertices:
+        raise RuntimeError(f"No vertices found in OBJ file: {path}")
+    arr = np.asarray(vertices, dtype=np.float32)
+    _OBJ_VERT_CACHE[key] = arr
+    return arr
+
+
+def transform_object_vertices(rest_vertices: np.ndarray, scale, rot_mat, trans) -> np.ndarray:
+    rest_vertices = np.asarray(rest_vertices, dtype=np.float32)
+    scale = np.asarray(scale, dtype=np.float32).reshape(-1)
+    rot_mat = np.asarray(rot_mat, dtype=np.float32).reshape(-1, 3, 3)
+    trans = np.asarray(trans, dtype=np.float32)
+    if trans.ndim == 3 and trans.shape[-1] == 1:
+        trans = trans[..., 0]
+    trans = trans.reshape(-1, 3)
+    length = min(len(scale), len(rot_mat), len(trans))
+    verts = np.einsum("tij,nj->tni", rot_mat[:length], rest_vertices)
+    verts = verts * scale[:length, None, None] + trans[:length, None, :]
+    return verts.astype(np.float32)
+
+
+def infer_omomo_object_mesh_dir(path: Path, args: argparse.Namespace) -> Optional[Path]:
+    if args.object_mesh_dir not in [None, "None", "none", "null", ""]:
+        return Path(args.object_mesh_dir)
+    for parent in [path.parent, *path.parents]:
+        candidate = parent / "captured_objects"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def omomo_object_vertices_from_record(data: Dict, path: Path, args: argparse.Namespace) -> Optional[np.ndarray]:
+    required = ("seq_name", "obj_trans", "obj_rot_mat", "obj_scale")
+    if not all(key in data for key in required):
+        return None
+    mesh_dir = infer_omomo_object_mesh_dir(path, args)
+    if mesh_dir is None:
+        return None
+    object_name = str(data["seq_name"]).split("_")[1]
+    if object_name in ("mop", "vacuum"):
+        top_path = mesh_dir / f"{object_name}_cleaned_simplified_top.obj"
+        bottom_path = mesh_dir / f"{object_name}_cleaned_simplified_bottom.obj"
+        if not top_path.exists() or not bottom_path.exists():
+            return None
+        top = transform_object_vertices(
+            load_obj_vertices(top_path),
+            data["obj_scale"],
+            data["obj_rot_mat"],
+            data["obj_trans"],
+        )
+        bottom = transform_object_vertices(
+            load_obj_vertices(bottom_path),
+            data.get("obj_bottom_scale", data["obj_scale"]),
+            data.get("obj_bottom_rot_mat", data["obj_rot_mat"]),
+            data.get("obj_bottom_trans", data["obj_trans"]),
+        )
+        length = min(len(top), len(bottom))
+        return np.concatenate([top[:length], bottom[:length]], axis=1).astype(np.float32)
+
+    mesh_path = mesh_dir / f"{object_name}_cleaned_simplified.obj"
+    if not mesh_path.exists():
+        return None
+    return transform_object_vertices(
+        load_obj_vertices(mesh_path),
+        data["obj_scale"],
+        data["obj_rot_mat"],
+        data["obj_trans"],
+    )
 
 
 def select_joints(joints: np.ndarray, joint_ids: Tuple[int, ...], context: str) -> np.ndarray:
@@ -332,7 +439,9 @@ def smplx_to_motion(
 
 def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> List[MotionSample]:
     label = normalize_label(find_first_key(data, ("label", "text", "raw_text", "action", "instruction")))
-    condition_id = normalize_condition_id(find_first_key(data, ("mm_group_id", "condition_id", "test_setting", "input_pkl_path")))
+    condition_id = normalize_condition_id(find_first_key(data, ("mm_group_id", "condition_id", "test_setting", "input_pkl_path", "seq_name")))
+    if "seq_name" in data and "start_t_idx" in data:
+        condition_id = f"{data['seq_name']}_{int(data['start_t_idx'])}_{int(data.get('end_t_idx', -1))}"
     scene_name = normalize_label(find_first_key(data, ("scene_name", "scene", "scene_id")))
     goal = find_first_key(data, ("goal", "hand_goal", "hand_location", "target", "target_location", "object_goal"))
     goal = as_float_array(goal)
@@ -343,9 +452,31 @@ def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> 
     features = maybe_feature_array(feature_value) if feature_value is not None else None
 
     joint_value = find_first_key(data, ("joints", "joint", "points", "points_orig", "points_all", "keypoints"))
+    if joint_value is None and "motion" in data:
+        motion_value = np.asarray(data["motion"], dtype=np.float32)
+        if motion_value.ndim == 2 and motion_value.shape[-1] >= 72:
+            joint_value = motion_value[:, :72].reshape(motion_value.shape[0], 24, 3)
     vertex_value = find_first_key(data, ("vertices", "verts"))
+    object_value = find_first_key(
+        data,
+        (
+            "object_vertices",
+            "object_verts",
+            "obj_vertices",
+            "obj_verts",
+            "object_points",
+            "obj_points",
+            "object_mesh_verts",
+            "obj_mesh_verts",
+        ),
+    )
     joints_list = ensure_motion_array(joint_value) if joint_value is not None else []
     vertices_list = ensure_motion_array(vertex_value) if vertex_value is not None else []
+    object_list = ensure_object_array(object_value) if object_value is not None else []
+    if not object_list:
+        omomo_object = omomo_object_vertices_from_record(data, path, args)
+        if omomo_object is not None:
+            object_list = [omomo_object]
 
     if not joints_list and {"transl", "body_pose", "global_orient"}.issubset(data.keys()):
         need_vertices = args.compute_vertices or args.body_points == "vertices"
@@ -375,12 +506,16 @@ def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> 
         vertices = vertices_list[idx] if idx < len(vertices_list) else None
         feature = features[idx] if features is not None and idx < len(features) else None
         name = path.stem if len(joints_list) == 1 else f"{path.stem}_{idx:03d}"
+        object_vertices = None
+        if object_list:
+            object_vertices = object_list[idx] if idx < len(object_list) else object_list[0]
         samples.append(
             MotionSample(
                 name=name,
                 source=str(path),
                 joints=joints,
                 vertices=vertices,
+                object_vertices=object_vertices,
                 features=feature,
                 label=label,
                 condition_id=condition_id,
@@ -393,9 +528,17 @@ def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> 
 
 def load_motion_file(path: Path, args: argparse.Namespace) -> List[MotionSample]:
     suffix = path.suffix.lower()
-    if suffix == ".pkl":
+    if suffix in (".pkl", ".p"):
         data = load_pickle(path)
         if isinstance(data, dict):
+            if data and all(isinstance(item, dict) for item in data.values()):
+                samples = []
+                for key in sorted(data.keys(), key=lambda item: str(item)):
+                    curr = make_samples_from_dict(data[key], path.parent / f"{path.stem}_{key}{path.suffix}", args)
+                    for sample in curr:
+                        sample.source = str(path)
+                    samples.extend(curr)
+                return samples
             return make_samples_from_dict(data, path, args)
         if isinstance(data, list):
             samples = []
@@ -960,6 +1103,8 @@ def sample_pair_id(sample: MotionSample) -> Optional[str]:
             match = re.search(pattern, text)
             if match:
                 return match.group(1)
+    if sample.condition_id is not None:
+        return str(sample.condition_id)
     return None
 
 
@@ -1244,29 +1389,111 @@ def goal_for_sample(sample: MotionSample, args: argparse.Namespace, goal_map: Di
     return goal_map.get(source_stem)
 
 
-def reaching_for_sample(sample: MotionSample, goal: np.ndarray, args: argparse.Namespace) -> Dict[str, float]:
-    if sample.joints is None:
+def contact_hand_ids(joint_count: int, args: argparse.Namespace) -> Tuple[int, ...]:
+    if args.contact_hand_joints:
+        candidates = args.contact_hand_joints
+    elif joint_count == 24:
+        candidates = (22, 23)
+    else:
+        candidates = args.hand_joints
+    return tuple(idx for idx in candidates if 0 <= idx < joint_count)
+
+
+def object_vertices_for_length(object_vertices: np.ndarray, length: int) -> np.ndarray:
+    object_vertices = np.asarray(object_vertices, dtype=np.float32)
+    if object_vertices.ndim == 2 and object_vertices.shape[-1] == 3:
+        return np.repeat(object_vertices[None], length, axis=0)
+    if object_vertices.ndim == 3 and object_vertices.shape[-1] == 3:
+        if object_vertices.shape[0] == 1:
+            return np.repeat(object_vertices, length, axis=0)
+        return object_vertices[:length]
+    raise ValueError(f"Expected object vertices shape [N, 3] or [T, N, 3], got {object_vertices.shape}.")
+
+
+def min_hand_object_distance(
+    joints: np.ndarray,
+    object_vertices: np.ndarray,
+    hand_ids: Tuple[int, ...],
+    chunk_size: int = 32,
+) -> np.ndarray:
+    distances = []
+    for start in range(0, joints.shape[0], chunk_size):
+        end = min(start + chunk_size, joints.shape[0])
+        hands = joints[start:end, list(hand_ids)]
+        obj = object_vertices[start:end]
+        diff = hands[:, :, None, :] - obj[:, None, :, :]
+        dist = np.sqrt(np.sum(diff * diff, axis=-1))
+        distances.append(dist.min(axis=(1, 2)))
+    return np.concatenate(distances, axis=0)
+
+
+def contact_metrics_for_pair(
+    generated: MotionSample,
+    reference: MotionSample,
+    args: argparse.Namespace,
+) -> Dict[str, float]:
+    if generated.joints is None or reference.joints is None:
         return {}
-    hand_ids = [idx for idx in args.hand_joints if idx < sample.joints.shape[1]]
+    object_vertices = reference.object_vertices if reference.object_vertices is not None else generated.object_vertices
+    if object_vertices is None:
+        return {}
+
+    object_len = object_vertices.shape[0] if np.asarray(object_vertices).ndim == 3 else min(len(generated.joints), len(reference.joints))
+    length = min(len(generated.joints), len(reference.joints), int(object_len))
+    if length <= 0:
+        return {}
+
+    pred_joints = np.asarray(generated.joints[:length], dtype=np.float32)
+    gt_joints = np.asarray(reference.joints[:length], dtype=np.float32)
+    joint_count = min(pred_joints.shape[1], gt_joints.shape[1])
+    pred_joints = pred_joints[:, :joint_count]
+    gt_joints = gt_joints[:, :joint_count]
+    hand_ids = contact_hand_ids(joint_count, args)
     if not hand_ids:
         return {}
-    hands = sample.joints[:, hand_ids]
-    dist = np.linalg.norm(hands - goal.reshape(1, 1, 3), axis=-1).min(axis=1)
-    reached = np.flatnonzero(dist <= args.reach_threshold)
+
+    obj = object_vertices_for_length(object_vertices, length)
+    threshold = float(args.contact_threshold)
+    gt_dist = min_hand_object_distance(gt_joints, obj, hand_ids)
+    pred_dist = min_hand_object_distance(pred_joints, obj, hand_ids)
+    gt_contact = gt_dist < threshold
+    pred_contact = pred_dist < threshold
+
+    tp = int(np.logical_and(gt_contact, pred_contact).sum())
+    fp = int(np.logical_and(~gt_contact, pred_contact).sum())
+    fn = int(np.logical_and(gt_contact, ~pred_contact).sum())
+
+    precision = 0.0 if (tp + fp) == 0 else tp / float(tp + fp)
+    recall = 0.0 if (tp + fn) == 0 else tp / float(tp + fn)
+    f1 = 0.0 if precision == 0.0 and recall == 0.0 else 2.0 * precision * recall / (precision + recall)
     return {
-        "reach_error_dist": float(dist.min()),
-        "reach_final_error_dist": float(dist[-1]),
-        "time_used": float(reached[0] / args.fps) if reached.size else float("nan"),
+        "contact_precision": float(precision),
+        "contact_recall": float(recall),
+        "contact_f1_score": float(f1),
     }
 
 
-def reaching_metrics(samples: Sequence[MotionSample], args: argparse.Namespace) -> Dict[str, float]:
-    goal_map = load_goal_map(args.goal_file)
+def reaching_metrics(
+    samples: Sequence[MotionSample],
+    reference: Optional[Sequence[MotionSample]],
+    args: argparse.Namespace,
+) -> Dict[str, float]:
     values = []
-    for sample in progress_iter(samples, desc="Reaching", enabled=args.show_progress, total=len(samples)):
-        goal = goal_for_sample(sample, args, goal_map)
-        curr = reaching_for_sample(sample, goal, args) if goal is not None else {}
-        values.append(curr)
+    if reference:
+        reference_by_id = {}
+        for sample in reference:
+            key = sample_pair_id(sample)
+            if key is not None:
+                reference_by_id[key] = sample
+        for idx, sample in enumerate(progress_iter(samples, desc="Human-object contact", enabled=args.show_progress, total=len(samples))):
+            ref = None
+            key = sample_pair_id(sample)
+            if key is not None:
+                ref = reference_by_id.get(key)
+            if ref is None and idx < len(reference):
+                ref = reference[idx]
+            if ref is not None:
+                values.append(contact_metrics_for_pair(sample, ref, args))
     metrics = aggregate_dicts(values)
     pene = penetration_metrics(samples, args, include_distance=False, desc="Reaching penetration")
     if "pene_scene_percent" in pene:
@@ -1447,6 +1674,22 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument("--goal-file", default=config_default(config, "goal_file", None), help="JSON map or CSV with name,x,y,z columns.")
     parser.add_argument("--hand-joints", default=config_default(config, "hand_joints", ",".join(map(str, DEFAULT_HAND_JOINTS))))
     parser.add_argument("--reach-threshold", type=float, default=config_default(config, "reach_threshold", 0.20))
+    parser.add_argument(
+        "--contact-hand-joints",
+        default=config_default(config, "contact_hand_joints", None),
+        help="Hand joint ids for human-object contact. Defaults to 22,23 for 24-joint OMOMO; otherwise --hand-joints.",
+    )
+    parser.add_argument(
+        "--contact-threshold",
+        type=float,
+        default=config_default(config, "contact_threshold", 0.05),
+        help="Distance threshold in meters for hand-object contact labels.",
+    )
+    parser.add_argument(
+        "--object-mesh-dir",
+        default=config_default(config, "object_mesh_dir", None),
+        help="Optional OMOMO captured_objects folder for reconstructing object vertices from .p records.",
+    )
 
     parser.add_argument("--smpl-dir", default=config_default(config, "smpl_dir", None), help="Required when evaluating pkl files containing SMPL-X params.")
     parser.add_argument("--gender", default=config_default(config, "gender", "male"))
@@ -1472,6 +1715,7 @@ def main() -> None:
     args.joints_ind = parse_ints(args.joints_ind)
     args.reference_joints_ind = parse_ints(args.reference_joints_ind)
     args.motion_evaluator_joints_ind = parse_ints(args.motion_evaluator_joints_ind)
+    args.contact_hand_joints = parse_ints(args.contact_hand_joints)
 
     generated = load_samples(
         args.generated,
@@ -1509,7 +1753,7 @@ def main() -> None:
             results["locomotion"] = {}
     if args.metrics in ("all", "reaching"):
         try:
-            results["reaching"] = reaching_metrics(generated, args)
+            results["reaching"] = reaching_metrics(generated, reference, args)
         except Exception as exc:
             warnings.warn(f"Reaching metrics skipped: {exc}")
             results["reaching"] = {}

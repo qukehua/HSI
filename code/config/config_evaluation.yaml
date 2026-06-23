@@ -84,11 +84,16 @@ floor_height: null
 contact_height: 0.05
 contact_velocity: 0.10
 
-# Object reaching metrics.
+# Human-object contact metrics. These replace the old reach_error_dist,
+# reach_final_error_dist, and time_used fields in the reaching metric group.
+# Defaults follow OMOMO joints24: hands are joints 22 and 23, threshold is 5cm.
 goal: null
 goal_file: null
 hand_joints: [20, 21, 25, 26, 27, 40, 49]
 reach_threshold: 0.20
+contact_hand_joints: null
+contact_threshold: 0.05
+object_mesh_dir: null
 
 # SMPL-X conversion settings for sample.py output pkl files.
 # Required when generated files contain transl/body_pose/global_orient.

@@ -200,6 +200,17 @@ python evaluation.py ^
 
 For TRUMANS, use the TRUMANS evaluator checkpoint and the TRUMANS reference files/split. The evaluator checkpoint must be trained with the same joint set as the motions being evaluated.
 
+#Human-Object Contact Precision, Recall, F1
+```sh
+python evaluation.py ^
+  --generated ..\results\outputs\*.pkl ^
+  --reference ..\dataset\OMOMO\data\test_diffusion_manip_seq_joints24.p ^
+  --metrics reaching ^
+  --contact-threshold 0.05
+```
+
+The `reaching` metric group reports OMOMO-style `contact_precision`, `contact_recall`, and `contact_f1_score` when generated/reference samples contain object vertices such as `obj_verts`, `object_verts`, or `object_points`.
+
 #Pene%, Pene mean, Pene max, Foot Sliding
 ```sh
 python evaluation.py ^
