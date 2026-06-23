@@ -253,6 +253,20 @@ def load_pickle(path: Path):
         return pkl.load(f)
 
 
+def select_joints(joints: np.ndarray, joint_ids: Tuple[int, ...], context: str) -> np.ndarray:
+    if not joint_ids:
+        return joints
+    if joints.ndim != 3:
+        raise ValueError(f"{context}: expected joints shape [T, J, 3], got {joints.shape}.")
+    max_id = max(joint_ids)
+    if max_id >= joints.shape[1]:
+        raise ValueError(
+            f"{context}: joint id {max_id} is out of range for {joints.shape[1]} joints. "
+            "Check reference_joints_ind / motion_evaluator_joints_ind."
+        )
+    return joints[:, list(joint_ids)]
+
+
 def smplx_to_motion(
     data: Dict,
     args: argparse.Namespace,
@@ -570,6 +584,7 @@ def load_reference_dataset(args: argparse.Namespace) -> List[MotionSample]:
         clip = np.asarray(joints_all[start:stop:int(args.reference_step)], dtype=np.float32)
         if clip.shape[0] != int(args.reference_window_size):
             continue
+        clip = select_joints(clip, args.reference_joints_ind, f"reference clip gt_{idx}")
         samples.append(
             MotionSample(
                 name=f"gt_{idx}",
@@ -620,6 +635,7 @@ def load_reference_clips_for_indices(
         clip = np.asarray(joints_all[start:stop:int(args.reference_step)], dtype=np.float32)
         if clip.shape[0] != int(args.reference_window_size):
             continue
+        clip = select_joints(clip, args.reference_joints_ind, f"paired reference clip gt_{idx}")
         samples.append(
             MotionSample(
                 name=f"gt_{idx}",
@@ -714,6 +730,90 @@ def project_feature_pair(
     return real.dot(projection).astype(np.float32), fake.dot(projection).astype(np.float32)
 
 
+def resolve_torch_device(device_name: str):
+    if torch is None:
+        raise RuntimeError("torch is required when --motion-evaluator-checkpoint is set.")
+    if str(device_name).startswith("cuda") and not torch.cuda.is_available():
+        return torch.device("cpu")
+    return torch.device(device_name)
+
+
+def load_motion_evaluator(args: argparse.Namespace):
+    if args.motion_evaluator_checkpoint in [None, "None", "none", "null", ""]:
+        return None
+    if torch is None:
+        raise RuntimeError("torch is required to load a motion evaluator checkpoint.")
+    from models.motion_evaluator import build_motion_evaluator_from_checkpoint
+
+    device = resolve_torch_device(args.motion_evaluator_device or args.device)
+    checkpoint_path = Path(args.motion_evaluator_checkpoint)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model = build_motion_evaluator_from_checkpoint(checkpoint, map_location=device)
+    model.eval()
+    return model, checkpoint.get("config", model.config), device
+
+
+def sample_motion_for_evaluator(
+    sample: MotionSample,
+    expected_dim: int,
+    joint_ids: Tuple[int, ...],
+) -> np.ndarray:
+    if sample.joints is None:
+        raise RuntimeError(
+            f"{sample.name} has no joints. Evaluator-space metrics require joints; "
+            "use plain feature inputs only without --motion-evaluator-checkpoint."
+        )
+    joints = select_joints(np.asarray(sample.joints, dtype=np.float32), joint_ids, sample.name)
+    flat = joints.reshape(joints.shape[0], -1)
+    if flat.shape[-1] != expected_dim:
+        raise RuntimeError(
+            f"{sample.name} motion dim {flat.shape[-1]} does not match evaluator dim {expected_dim}. "
+            "Use a checkpoint trained for this dataset/joint set, or set reference_joints_ind / "
+            "motion_evaluator_joints_ind consistently."
+        )
+    return flat
+
+
+def collect_evaluator_features(
+    samples: Sequence[MotionSample],
+    evaluator_bundle,
+    args: argparse.Namespace,
+    desc: str = "Evaluator features",
+) -> np.ndarray:
+    if evaluator_bundle is None:
+        raise RuntimeError("No motion evaluator was loaded.")
+    model, config, device = evaluator_bundle
+    expected_dim = int(config["motion_dim"])
+    batch_size = int(args.motion_evaluator_batch_size)
+    features = []
+
+    with torch.no_grad():
+        for start in progress_iter(
+            range(0, len(samples), batch_size),
+            desc=desc,
+            enabled=args.show_progress,
+            total=math.ceil(len(samples) / max(batch_size, 1)),
+        ):
+            batch_samples = samples[start:start + batch_size]
+            motions = [
+                sample_motion_for_evaluator(sample, expected_dim, args.motion_evaluator_joints_ind)
+                for sample in batch_samples
+            ]
+            lengths = np.asarray([motion.shape[0] for motion in motions], dtype=np.int64)
+            max_len = int(lengths.max())
+            padded = np.zeros((len(motions), max_len, expected_dim), dtype=np.float32)
+            for idx, motion in enumerate(motions):
+                padded[idx, : motion.shape[0]] = motion
+            motion_tensor = torch.as_tensor(padded, dtype=torch.float32, device=device)
+            length_tensor = torch.as_tensor(lengths, dtype=torch.long, device=device)
+            embedding = model.encode_motion(motion_tensor, length_tensor)
+            features.append(embedding.detach().cpu().numpy())
+
+    if not features:
+        raise RuntimeError("No evaluator features were produced.")
+    return np.concatenate(features, axis=0).astype(np.float32)
+
+
 def frechet_distance(real: np.ndarray, fake: np.ndarray, eps: float = 1e-6) -> float:
     mu_real = real.mean(axis=0)
     mu_fake = fake.mean(axis=0)
@@ -797,15 +897,38 @@ def interactive_metrics(
     args: argparse.Namespace,
 ) -> Dict[str, float]:
     rng = np.random.default_rng(args.seed)
-    gen_features = collect_features(generated, args.feature_frames, desc="Generated features", show_progress=args.show_progress)
-    if reference:
-        ref_features = collect_features(reference, args.feature_frames, desc="Reference features", show_progress=args.show_progress)
-        dim = min(gen_features.shape[1], ref_features.shape[1])
-        gen_features = gen_features[:, :dim]
-        ref_features = ref_features[:, :dim]
-        ref_features, gen_features = project_feature_pair(ref_features, gen_features, args.feature_dim, rng)
+    evaluator_bundle = load_motion_evaluator(args)
+    if evaluator_bundle is not None:
+        progress_write(
+            f"Using motion evaluator features from {args.motion_evaluator_checkpoint}",
+            args.show_progress,
+        )
+        gen_features = collect_evaluator_features(
+            generated,
+            evaluator_bundle,
+            args,
+            desc="Generated evaluator features",
+        )
+        if reference:
+            ref_features = collect_evaluator_features(
+                reference,
+                evaluator_bundle,
+                args,
+                desc="Reference evaluator features",
+            )
+        else:
+            ref_features = None
     else:
-        gen_features = project_features(gen_features, args.feature_dim, rng)
+        gen_features = collect_features(generated, args.feature_frames, desc="Generated features", show_progress=args.show_progress)
+        if reference:
+            ref_features = collect_features(reference, args.feature_frames, desc="Reference features", show_progress=args.show_progress)
+            dim = min(gen_features.shape[1], ref_features.shape[1])
+            gen_features = gen_features[:, :dim]
+            ref_features = ref_features[:, :dim]
+            ref_features, gen_features = project_feature_pair(ref_features, gen_features, args.feature_dim, rng)
+        else:
+            ref_features = None
+            gen_features = project_features(gen_features, args.feature_dim, rng)
 
     progress_write("Computing distribution metrics...", args.show_progress)
     metrics = {
@@ -1229,6 +1352,11 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--reference-joints-file", default=config_default(config, "reference_joints_file", "human_joints_aligned.npy"))
+    parser.add_argument(
+        "--reference-joints-ind",
+        default=config_default(config, "reference_joints_ind", None),
+        help="Optional joint ids to select when slicing clips from --reference-dataset.",
+    )
     parser.add_argument("--reference-split", default=config_default(config, "reference_split", None), help="Optional GT split name: train, val, or test.")
     parser.add_argument(
         "--reference-split-dataset",
@@ -1272,6 +1400,26 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
     parser.add_argument("--diversity-pairs", type=int, default=config_default(config, "diversity_pairs", 200))
     parser.add_argument("--multimodality-pairs", type=int, default=config_default(config, "multimodality_pairs", 100))
     parser.add_argument("--precision-k", type=int, default=config_default(config, "precision_k", 3))
+    parser.add_argument(
+        "--motion-evaluator-checkpoint",
+        default=config_default(config, "motion_evaluator_checkpoint", None),
+        help="Optional trained motion evaluator checkpoint. When set, interactive metrics use evaluator embeddings.",
+    )
+    parser.add_argument(
+        "--motion-evaluator-batch-size",
+        type=int,
+        default=config_default(config, "motion_evaluator_batch_size", 256),
+    )
+    parser.add_argument(
+        "--motion-evaluator-device",
+        default=config_default(config, "motion_evaluator_device", None),
+        help="Device for evaluator encoding. Defaults to --device.",
+    )
+    parser.add_argument(
+        "--motion-evaluator-joints-ind",
+        default=config_default(config, "motion_evaluator_joints_ind", None),
+        help="Optional joint ids to select from generated/reference samples before evaluator encoding.",
+    )
     parser.add_argument(
         "--mpjpe-frame-alignment",
         choices=("resample", "min"),
@@ -1322,6 +1470,8 @@ def main() -> None:
     args.foot_joints = parse_ints(args.foot_joints)
     args.hand_joints = parse_ints(args.hand_joints)
     args.joints_ind = parse_ints(args.joints_ind)
+    args.reference_joints_ind = parse_ints(args.reference_joints_ind)
+    args.motion_evaluator_joints_ind = parse_ints(args.motion_evaluator_joints_ind)
 
     generated = load_samples(
         args.generated,

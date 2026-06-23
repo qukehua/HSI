@@ -1,0 +1,49 @@
+defaults:
+  - dataset: lingo
+  - _self_
+
+exp_name: motion_evaluator_lingo
+exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
+
+device: cuda:0
+seed: 42
+batch_size: 256
+val_batch_size: ${batch_size}
+num_workers: 0
+epochs: 100
+lr: 0.0001
+weight_decay: 0.0001
+grad_clip: 1.0
+save_every: 10
+show_progress: true
+
+hidden_dim: 512
+text_hidden_dim: 512
+embedding_dim: 512
+num_layers: 2
+dropout: 0.1
+root_joint: 0
+denormalize_motion: true
+
+train: true
+scene_mode: auto
+max_window_size: 16
+motion_len: 100000
+vis: false
+start_type: stand
+load_language: true
+load_scene: false
+use_pi: true
+load_hand_goal: false
+load_pelvis_goal: false
+load_object: false
+
+train_split: train
+val_split: val
+
+dataset:
+  split: null
+
+hydra:
+  run:
+    dir: ${exp_dir}

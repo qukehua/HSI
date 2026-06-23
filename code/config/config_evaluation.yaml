@@ -20,6 +20,9 @@ reference_dataset: /share/qkh/dataset/lingo
 
 reference_motion_dict: language_motion_dict/language_motion_dict__inter_and_loco__16.pkl
 reference_joints_file: human_joints_aligned.npy
+# Optional joint ids for raw GT reference clips. Set this when reference_joints_file
+# contains more joints than the generated/evaluator joint set.
+reference_joints_ind: null
 reference_split: test
 reference_split_dataset: null
 reference_split_dir: splits
@@ -55,6 +58,13 @@ feature_dim: 512
 diversity_pairs: 200
 multimodality_pairs: 100
 precision_k: 3
+
+# Optional evaluator-space metrics. Train with train_motion_evaluator.py and set
+# this to results/motion_evaluator_*/checkpoints/best_model.pth.
+motion_evaluator_checkpoint: null
+motion_evaluator_batch_size: 256
+motion_evaluator_device: null
+motion_evaluator_joints_ind: null
 
 # MPJPE requires generated samples and GT references to share an id such as
 # idx-123 in mm_group_id/test_setting/input_pkl_path.

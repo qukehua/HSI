@@ -128,6 +128,14 @@ python train.py --config-name config_train \
 
 The LINGO setting uses `code/config/dataset/lingo.yaml`, with 28 joints and 768-D CLIP text features.
 
+Train a LINGO motion evaluator for evaluator-space FID/Diversity:
+
+```bash
+python train_motion_evaluator.py --config-name config_motion_evaluator_lingo \
+  dataset.folder=../dataset/lingo/window_t16_s3 \
+  dataset.scene_source_dir=../dataset/lingo
+```
+
 ### TRUMANS
 
 Place the TRUMANS official files under `../dataset/trumans/trumans`, including:
@@ -159,6 +167,13 @@ python train.py --config-name config_train_trumans \
 
 The TRUMANS setting uses `code/config/dataset/trumans.yaml`, with 24 joints, 10-D action labels, and object conditions from `object_flag.npy`, `object_mat.npy`, and `Object/*.npy`.
 
+Train a TRUMANS motion evaluator for evaluator-space FID/Diversity:
+
+```bash
+python train_motion_evaluator.py --config-name config_motion_evaluator_trumans \
+  dataset.folder=/path/to/trumans/trumans
+```
+
 The training script instantiates the dataloader from the selected dataset config, builds the conditional Flow Matching sampler from `./code/config/sampler/pelvis.yaml`, and trains the model using the configurations in `./code/config`.
 
 ## Model Evaluation
@@ -172,6 +187,20 @@ python evaluation.py ^
   --metrics interactive ^
   --smpl-dir ..\smpl_models
 ```
+
+Use a trained motion evaluator checkpoint to compute FID/Diversity/Precision/Recall/F1 in evaluator embedding space instead of the fallback hand-crafted joint features:
+
+```sh
+python evaluation.py ^
+  --generated ..\results\outputs\*.pkl ^
+  --reference-dataset ..\dataset\lingo ^
+  --reference-joints-ind 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,34,40,49 ^
+  --motion-evaluator-checkpoint ..\results\motion_evaluator_lingo\checkpoints\best_model.pth ^
+  --metrics interactive ^
+  --smpl-dir ..\smpl_models
+```
+
+For TRUMANS, use the TRUMANS evaluator checkpoint and the TRUMANS reference files/split. The evaluator checkpoint must be trained with the same joint set as the motions being evaluated.
 
 #Pene%, Pene mean, Pene max, Foot Sliding
 ```sh
