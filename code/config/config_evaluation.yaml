@@ -51,17 +51,16 @@ seed: 42
 
 # Interactive metrics.
 # If inputs already contain features/embeddings, those are used directly.
-# Otherwise the script builds simple joint-motion features and projects them
-# to feature_dim before computing FID/diversity/P-R-F1.
+# Otherwise set motion_evaluator_checkpoint to a trained evaluator checkpoint.
 feature_frames: 64
 feature_dim: 512
 diversity_pairs: 200
 multimodality_pairs: 100
 precision_k: 3
 
-# Optional evaluator-space metrics. Train with train_motion_evaluator.py and set
-# this to results/motion_evaluator_*/checkpoints/best_model.pth.
-motion_evaluator_checkpoint: null
+# Interactive metrics require a trained motion evaluator checkpoint.
+# Train with train_motion_evaluator.py, then set motion_evaluator_checkpoint below.
+motion_evaluator_checkpoint: /share/qkh/humoworld/results/motion_evaluator_lingo/checkpoints/best_model.pth
 motion_evaluator_batch_size: 256
 motion_evaluator_device: null
 motion_evaluator_joints_ind: null

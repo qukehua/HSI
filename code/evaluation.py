@@ -1041,37 +1041,33 @@ def interactive_metrics(
 ) -> Dict[str, float]:
     rng = np.random.default_rng(args.seed)
     evaluator_bundle = load_motion_evaluator(args)
-    if evaluator_bundle is not None:
-        progress_write(
-            f"Using motion evaluator features from {args.motion_evaluator_checkpoint}",
-            args.show_progress,
+    if evaluator_bundle is None:
+        warnings.warn(
+            "Interactive metrics skipped: motion_evaluator_checkpoint is required. "
+            "Train with train_motion_evaluator.py and set motion_evaluator_checkpoint in the evaluation config.",
+            stacklevel=2,
         )
-        gen_features = collect_evaluator_features(
-            generated,
+        return {}
+
+    progress_write(
+        f"Using motion evaluator features from {args.motion_evaluator_checkpoint}",
+        args.show_progress,
+    )
+    gen_features = collect_evaluator_features(
+        generated,
+        evaluator_bundle,
+        args,
+        desc="Generated evaluator features",
+    )
+    if reference:
+        ref_features = collect_evaluator_features(
+            reference,
             evaluator_bundle,
             args,
-            desc="Generated evaluator features",
+            desc="Reference evaluator features",
         )
-        if reference:
-            ref_features = collect_evaluator_features(
-                reference,
-                evaluator_bundle,
-                args,
-                desc="Reference evaluator features",
-            )
-        else:
-            ref_features = None
     else:
-        gen_features = collect_features(generated, args.feature_frames, desc="Generated features", show_progress=args.show_progress)
-        if reference:
-            ref_features = collect_features(reference, args.feature_frames, desc="Reference features", show_progress=args.show_progress)
-            dim = min(gen_features.shape[1], ref_features.shape[1])
-            gen_features = gen_features[:, :dim]
-            ref_features = ref_features[:, :dim]
-            ref_features, gen_features = project_feature_pair(ref_features, gen_features, args.feature_dim, rng)
-        else:
-            ref_features = None
-            gen_features = project_features(gen_features, args.feature_dim, rng)
+        ref_features = None
 
     progress_write("Computing distribution metrics...", args.show_progress)
     metrics = {
