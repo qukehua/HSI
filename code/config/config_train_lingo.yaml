@@ -51,14 +51,14 @@ load_hand_goal: true
 load_pelvis_goal: true
 load_object: false
 auto_regre_num: 2
+use_motion_state: true
+motion_state_len: 4
 
 # Auxiliary loss switches and weights (passed to sampler.pelvis).
-use_aux_losses: false
+use_aux_losses: true
 completion_pos_weight: 32.0
 aux_loss_weights:
-  pelvis_traj: 0
-  duration: 0
-  valid_mask: 0
+  pelvis_traj: 0.5
   completion: 0.2
   smoothness: 0
 

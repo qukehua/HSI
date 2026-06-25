@@ -36,6 +36,8 @@ class LingoDataset(Dataset):
             scene_mode="auto",
             scene_source_dir=None,
             test_scene_name=None,
+            motion_state_len=0,
+            motion_state_prefix_len=None,
             **kwargs,
     ):
         self.folder = Path(folder)
@@ -55,6 +57,8 @@ class LingoDataset(Dataset):
         self.batch_size = batch_size
         self.nb_voxels = list(nb_voxels)
         self.mesh_grid = mesh_grid
+        self.motion_state_len = max(0, int(motion_state_len or 0))
+        self.motion_state_prefix_len = int(motion_state_prefix_len or kwargs.get("auto_regre_num", 2))
 
         self.human_motion = np.load(self.folder / "human_motion.npy", mmap_mode="r")
         self.valid_mask = np.load(self.folder / "valid_mask.npy", mmap_mode="r")
@@ -69,6 +73,19 @@ class LingoDataset(Dataset):
         self.pi = np.load(self.folder / "pi.npy", mmap_mode="r")
         self.need_pi = np.load(self.folder / "need_pi.npy", mmap_mode="r")
         self.object_present = np.load(self.folder / "object_present.npy", mmap_mode="r")
+        self.motion_state = None
+        self.motion_state_mask = None
+        motion_state_path = self.folder / "motion_state.npy"
+        motion_state_mask_path = self.folder / "motion_state_mask.npy"
+        if self.motion_state_len > 0 and motion_state_path.exists():
+            self.motion_state = np.load(motion_state_path, mmap_mode="r")
+            if self.motion_state.shape[1] != self.motion_state_len:
+                raise ValueError(
+                    f"Config motion_state_len={self.motion_state_len} does not match "
+                    f"motion_state length={self.motion_state.shape[1]} in {self.folder}."
+                )
+            if motion_state_mask_path.exists():
+                self.motion_state_mask = np.load(motion_state_mask_path, mmap_mode="r")
 
         with open(self.folder / "scene_name.pkl", "rb") as f:
             self.scene_name = pkl.load(f)
@@ -161,6 +178,34 @@ class LingoDataset(Dataset):
         self.batch_id = torch.linspace(0, self.batch_size - 1, self.batch_size).tile((grid_count, 1)).T
         self.batch_id = self.batch_id.reshape(-1, 1).to(device=self.device, dtype=torch.long)
 
+    def _motion_state_for_window(self, src_idx):
+        if self.motion_state_len <= 0:
+            return None, None
+        if self.motion_state is not None:
+            state = np.asarray(self.motion_state[src_idx], dtype=np.float32)
+            if self.motion_state_mask is None:
+                mask = np.ones(self.motion_state_len, dtype=np.bool_)
+            else:
+                mask = np.asarray(self.motion_state_mask[src_idx], dtype=np.bool_)
+            return state, mask
+
+        motion = np.asarray(self.human_motion[src_idx], dtype=np.float32)
+        valid = np.asarray(self.valid_mask[src_idx], dtype=np.bool_)
+        valid_len = int(valid.sum())
+        prefix_len = max(1, min(self.motion_state_prefix_len, valid_len, motion.shape[0]))
+        prefix = motion[:prefix_len]
+        pad_len = self.motion_state_len - prefix_len
+        if pad_len > 0:
+            state = np.concatenate([np.repeat(prefix[:1], pad_len, axis=0), prefix], axis=0)
+            mask = np.concatenate(
+                [np.zeros(pad_len, dtype=np.bool_), np.ones(prefix_len, dtype=np.bool_)],
+                axis=0,
+            )
+        else:
+            state = prefix[-self.motion_state_len:]
+            mask = np.ones(self.motion_state_len, dtype=np.bool_)
+        return state.astype(np.float32), mask.astype(np.bool_)
+
     def __getitem__(self, idx):
         src_idx = int(self.indices[idx])
         scene_name = self.scene_name[src_idx]
@@ -168,6 +213,11 @@ class LingoDataset(Dataset):
 
         pi = int(self.pi[src_idx]) if self.use_pi else 0
         need_pi = bool(self.need_pi[src_idx]) if self.use_pi else False
+        motion_state, motion_state_mask = self._motion_state_for_window(src_idx)
+        extra = {}
+        if motion_state is not None:
+            extra["motion_state"] = motion_state
+            extra["motion_state_mask"] = motion_state_mask
 
         return (
             np.asarray(self.human_motion[src_idx], dtype=np.float32),
@@ -186,6 +236,7 @@ class LingoDataset(Dataset):
             np.asarray(self.valid_mask[src_idx], dtype=np.bool_),
             np.asarray(self.object_present[src_idx], dtype=np.bool_),
             np.asarray(self.completion_label[src_idx], dtype=np.bool_),
+            extra,
         )
 
     def get_occ_for_points(self, points, scene_flag):

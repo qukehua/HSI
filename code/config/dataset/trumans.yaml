@@ -18,6 +18,8 @@ load_object: ${load_object}
 use_pi: ${use_pi}
 max_window_size: ${max_window_size}
 seq_len: ${max_window_size}
+motion_state_len: ${motion_state_len}
+motion_state_prefix_len: ${auto_regre_num}
 split: null
 split_dir: splits
 scene_mode: ${scene_mode}

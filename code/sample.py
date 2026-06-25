@@ -35,7 +35,32 @@ def load_pickle_compat(path):
         return pkl.load(f)
 
 
-def sample_step(cfg, step, mat, fixed_points, sampler, cond, trajectory, pi):
+def build_motion_state(cfg, sampler, points_global, mat):
+    if not bool(cfg.get("use_motion_state", False)):
+        return None, None
+    state_len = int(cfg.get("motion_state_len", 0))
+    if state_len <= 0:
+        return None, None
+
+    actual_len = min(state_len, points_global.shape[1])
+    state = points_global[:, -actual_len:].reshape(cfg.batch_size, actual_len, cfg.dataset.nb_joints * 3)
+    mask = torch.ones(cfg.batch_size, actual_len, dtype=torch.bool, device=points_global.device)
+    if actual_len < state_len:
+        pad = state[:, :1].repeat(1, state_len - actual_len, 1)
+        state = torch.cat([pad, state], dim=1)
+        mask = torch.cat(
+            [
+                torch.zeros(cfg.batch_size, state_len - actual_len, dtype=torch.bool, device=points_global.device),
+                mask,
+            ],
+            dim=1,
+        )
+
+    state = sampler.dataset.normalize_torch(transform_points(state, torch.inverse(mat)))
+    return state, mask
+
+
+def sample_step(cfg, step, mat, fixed_points, motion_state, motion_state_mask, sampler, cond, trajectory, pi):
     raw_text = cond['raw_text']
     text_emb = cond['text_emb']
     pelvis_goal = cond['pelvis_goal']
@@ -105,7 +130,22 @@ def sample_step(cfg, step, mat, fixed_points, sampler, cond, trajectory, pi):
     scene_flag = sampler.dataset.scene_dict[cond['scene_name']]
     scene_flag = torch.tensor([scene_flag]*cfg.batch_size).to(cfg.device)
 
-    samples, occs, model_out = sampler.p_sample_loop(fixed_points, mat, scene_flag, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco)
+    samples, occs, model_out = sampler.p_sample_loop(
+        fixed_points,
+        mat,
+        scene_flag,
+        text_emb,
+        pelvis_goal,
+        hand_goal,
+        is_pick,
+        need_scene,
+        need_pelvis_dir,
+        pi,
+        need_pi,
+        is_loco,
+        motion_state=motion_state,
+        motion_state_mask=motion_state_mask,
+    )
 
     points_gene = samples[-1]
     points_orig = transform_points(sampler.dataset.denormalize_torch(points_gene), mat)
@@ -304,10 +344,12 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
                 mat = get_mat(cfg, points_orig)
                 fixed_points = points_orig[:, -cfg.auto_regre_num:].reshape(cfg.batch_size, cfg.auto_regre_num, cfg.dataset.nb_joints*3)
                 fixed_points = sampler_body.dataset.normalize_torch(transform_points(fixed_points, torch.inverse(mat)))
+                motion_state, motion_state_mask = build_motion_state(cfg, sampler_body, points_orig, mat)
             else:
                 mat = get_mat(cfg, points)
                 fixed_points = points[:, -cfg.auto_regre_num:].reshape(cfg.batch_size, cfg.auto_regre_num, cfg.dataset.nb_joints*3)
                 fixed_points = sampler_body.dataset.normalize_torch(transform_points(fixed_points, torch.inverse(mat)))
+                motion_state, motion_state_mask = build_motion_state(cfg, sampler_body, points, mat)
 
             phase = 1
             speed_inter = 3
@@ -315,7 +357,18 @@ def run_sample_once(cfg, sampler_body, model_joints_to_smplx, exp_dir=None, save
             pi_list.append(pi.cpu().numpy())
             raw_text_list.append(cond['raw_text'])
 
-            info_dict = sample_step(cfg, step, mat, fixed_points, sampler_body, cond, trajectory, pi)
+            info_dict = sample_step(
+                cfg,
+                step,
+                mat,
+                fixed_points,
+                motion_state,
+                motion_state_mask,
+                sampler_body,
+                cond,
+                trajectory,
+                pi,
+            )
             points = info_dict['points_orig']  # points in global coordinates and is denormalized
 
             completion_value = float("nan")

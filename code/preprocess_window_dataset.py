@@ -99,6 +99,18 @@ def parse_args():
     parser.add_argument("--window-size", type=int, default=16)
     parser.add_argument("--step", type=int, default=3)
     parser.add_argument(
+        "--motion-state-len",
+        type=int,
+        default=4,
+        help="Number of boundary-history frames saved for the optional motion-state token.",
+    )
+    parser.add_argument(
+        "--motion-state-prefix-len",
+        type=int,
+        default=2,
+        help="Number of current-window prefix frames included at the end of each motion-state history.",
+    )
+    parser.add_argument(
         "--terminal-margin",
         type=int,
         default=None,
@@ -158,6 +170,8 @@ def main():
     motion_dim = num_joints * 3
     n = int(source_count)
     t = int(args.window_size)
+    state_len = max(0, int(args.motion_state_len))
+    state_prefix_len = max(1, int(args.motion_state_prefix_len))
 
     human_motion = np.lib.format.open_memmap(
         output_dir / "human_motion.npy",
@@ -166,6 +180,21 @@ def main():
         shape=(n, t, motion_dim),
     )
     valid_mask = np.lib.format.open_memmap(output_dir / "valid_mask.npy", mode="w+", dtype=np.bool_, shape=(n, t))
+    motion_state = None
+    motion_state_mask = None
+    if state_len > 0:
+        motion_state = np.lib.format.open_memmap(
+            output_dir / "motion_state.npy",
+            mode="w+",
+            dtype=np.float32,
+            shape=(n, state_len, motion_dim),
+        )
+        motion_state_mask = np.lib.format.open_memmap(
+            output_dir / "motion_state_mask.npy",
+            mode="w+",
+            dtype=np.bool_,
+            shape=(n, state_len),
+        )
     text_emb = np.lib.format.open_memmap(
         output_dir / "text_emb.npy",
         mode="w+",
@@ -178,6 +207,9 @@ def main():
 
     human_motion[:] = 0.0
     valid_mask[:] = False
+    if motion_state is not None:
+        motion_state[:] = 0.0
+        motion_state_mask[:] = False
     text_emb[:] = 0.0
     mat[:] = np.eye(4, dtype=np.float32)
     pelvis_goal[:] = 0.0
@@ -209,6 +241,20 @@ def main():
         motion, sample_mat, init_shift, local_rot = make_local_motion(joints, orient, frame_ids[:write_len])
         goal = motion[write_len - 1, 0].copy()
         goal[1] = 0.0
+        if motion_state is not None:
+            prefix_frames = min(state_prefix_len, write_len)
+            state_end = start + (prefix_frames - 1) * args.step
+            state_ids = state_end - np.arange(state_len - 1, -1, -1, dtype=np.int64) * args.step
+            min_state_frame = int(motion_dict["start_range"][out_i]) if "start_range" in motion_dict else 0
+            state_valid = (state_ids >= min_state_frame) & (state_ids < joints.shape[0])
+            state_ids_safe = np.where(state_valid, state_ids, start).astype(np.int64)
+            state_motion = np.asarray(joints[state_ids_safe], dtype=np.float32).copy()
+            state_motion -= init_shift
+            state_motion = state_motion @ local_rot.T
+            if args.normalize:
+                state_motion = normalize_points(state_motion, coord_min, coord_max)
+            motion_state[out_i] = state_motion.reshape(state_len, motion_dim)
+            motion_state_mask[out_i] = state_valid
         if args.normalize:
             motion = normalize_points(motion, coord_min, coord_max)
 
@@ -290,6 +336,8 @@ def main():
         "num_samples": int(n),
         "t_max": int(t),
         "step": int(args.step),
+        "motion_state_len": int(state_len),
+        "motion_state_prefix_len": int(state_prefix_len),
         "normalize": bool(args.normalize),
         "motion_shape": [int(n), int(t), int(motion_dim)],
         "num_joints": int(num_joints),

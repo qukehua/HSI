@@ -16,6 +16,8 @@ synhsi_body:
   load_hand_goal: ${load_hand_goal}
   load_pelvis_goal: ${load_pelvis_goal}
   load_object: ${load_object}
+  use_motion_state: ${use_motion_state}
+  motion_state_len: ${motion_state_len}
   object_motion_dim: 9
   trajectory_anchor_stride: 4
   num_scene_query_frames: 8

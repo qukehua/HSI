@@ -93,6 +93,8 @@ class TrumansDataset(Dataset):
             max_samples=0,
             object_num_points=512,
             normalize_object_motion=True,
+            motion_state_len=0,
+            motion_state_prefix_len=None,
             **kwargs,
     ):
         self.folder = Path(folder)
@@ -117,6 +119,8 @@ class TrumansDataset(Dataset):
         self.split_ratios = (float(train_ratio), float(val_ratio), float(test_ratio))
         self.object_num_points = int(object_num_points)
         self.normalize_object_motion = bool(normalize_object_motion)
+        self.motion_state_len = max(0, int(motion_state_len or 0))
+        self.motion_state_prefix_len = int(motion_state_prefix_len or kwargs.get("auto_regre_num", 2))
 
         mmap = "r"
         self.human_joints = np.load(self.folder / "human_joints.npy", mmap_mode=mmap)
@@ -231,6 +235,25 @@ class TrumansDataset(Dataset):
         mat[:3, 3] = init_shift
         return motion, mat, init_shift, local_rot
 
+    def _motion_state(self, src_idx, init_shift, local_rot, valid_len):
+        if self.motion_state_len <= 0:
+            return None, None
+        start = int(self.idx_start[src_idx])
+        prefix_frames = max(1, min(self.motion_state_prefix_len, valid_len))
+        state_end = start + (prefix_frames - 1) * self.step
+        state_ids = state_end - np.arange(self.motion_state_len - 1, -1, -1, dtype=np.int64) * self.step
+        state_valid = (state_ids >= 0) & (state_ids < self.human_joints.shape[0])
+        state_ids_safe = np.where(state_valid, state_ids, start).astype(np.int64)
+        state = np.asarray(self.human_joints[state_ids_safe], dtype=np.float32).copy()
+        state -= init_shift
+        state = state @ local_rot.T
+        if self.normalize_enabled:
+            state = _normalize_points(state, self.min, self.max)
+        return (
+            state.reshape(self.motion_state_len, self.nb_joints * 3).astype(np.float32),
+            state_valid.astype(np.bool_),
+        )
+
     def _primary_object_id(self, frame_ids, valid):
         flags = np.asarray(self.object_flag[frame_ids[valid]], dtype=np.int16)
         present = flags != -1
@@ -306,6 +329,7 @@ class TrumansDataset(Dataset):
         motion, mat, init_shift, local_rot = self._local_motion(frame_ids, valid)
         pelvis_goal = motion[valid_len - 1, 0].copy()
         pelvis_goal[1] = 0.0
+        motion_state, motion_state_mask = self._motion_state(src_idx, init_shift, local_rot, valid_len)
 
         if self.normalize_enabled:
             motion = _normalize_points(motion, self.min, self.max)
@@ -317,6 +341,14 @@ class TrumansDataset(Dataset):
         object_motion, object_points, object_goal, object_present = self._object_condition(
             frame_ids, valid, init_shift, local_rot
         )
+        extra = {
+            "object_motion": object_motion.astype(np.float32),
+            "object_points": object_points.astype(np.float32),
+            "object_goal": object_goal.astype(np.float32),
+        }
+        if motion_state is not None:
+            extra["motion_state"] = motion_state
+            extra["motion_state_mask"] = motion_state_mask
 
         return (
             motion.reshape(self.max_window_size, self.nb_joints * 3).astype(np.float32),
@@ -335,11 +367,7 @@ class TrumansDataset(Dataset):
             valid.astype(np.bool_),
             np.asarray(object_present, dtype=np.bool_),
             np.asarray(False, dtype=np.bool_),
-            {
-                "object_motion": object_motion.astype(np.float32),
-                "object_points": object_points.astype(np.float32),
-                "object_goal": object_goal.astype(np.float32),
-            },
+            extra,
         )
 
     def get_occ_for_points(self, points, scene_flag):

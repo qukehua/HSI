@@ -29,8 +29,6 @@ class Sampler:
         self.use_aux_losses = kwargs.get('use_aux_losses', False)
         self.aux_loss_weights = kwargs.get('aux_loss_weights', {
             'pelvis_traj': 0.5,
-            'duration': 0.2,
-            'valid_mask': 0.1,
             'smoothness': 0.05,
             'completion': 0.2,
         })
@@ -43,6 +41,8 @@ class Sampler:
         self.clip_denoised_min = kwargs.get('clip_denoised_min', -1.5)
         self.clip_denoised_max = kwargs.get('clip_denoised_max', 1.5)
         self.debug_sampling = kwargs.get('debug_sampling', False)
+        self.use_motion_state = kwargs.get('use_motion_state', False)
+        self.motion_state_len = int(kwargs.get('motion_state_len', 0) or 0)
         self.get_scheduler()
 
     def set_dataset_and_model(self, dataset, model):
@@ -119,6 +119,8 @@ class Sampler:
             object_motion=None,
             object_goal=None,
             object_points=None,
+            motion_state=None,
+            motion_state_mask=None,
             noise=None,
             loss_type='huber',
             return_loss_dict=False,
@@ -208,6 +210,8 @@ class Sampler:
             object_goal=object_goal,
             object_points=object_points,
             object_present=object_present,
+            motion_state=motion_state,
+            motion_state_mask=motion_state_mask,
             return_dict=self.use_aux_losses or completion_label is not None,
         )
         predicted_field = model_out["pred_noise"] if isinstance(model_out, dict) else model_out
@@ -229,13 +233,9 @@ class Sampler:
             "flow_matching": denoise_loss if self.objective == 'flow_matching' else zero_loss,
             "aux_total": zero_loss,
             "pelvis_traj": zero_loss,
-            "duration": zero_loss,
-            "valid_mask": zero_loss,
             "completion": zero_loss,
             "smoothness": zero_loss,
             "pelvis_traj_weighted": zero_loss,
-            "duration_weighted": zero_loss,
-            "valid_mask_weighted": zero_loss,
             "completion_weighted": zero_loss,
             "smoothness_weighted": zero_loss,
         }
@@ -247,17 +247,11 @@ class Sampler:
             pelvis_loss = (torch.abs(model_out["pelvis_traj_dense"] - pelvis_gt) * valid_frame.unsqueeze(-1)).sum()
             pelvis_loss = pelvis_loss / valid_frame.sum().clamp_min(1.0)
 
-            if length is None:
-                length = valid_frame.sum(dim=1).long()
-            else:
-                length = length.to(device=x_start.device, dtype=torch.long)
-            end_target = length.clamp(min=1, max=x_start.shape[1]) - 1
-            duration_loss = F.cross_entropy(model_out["end_logits"], end_target)
-            valid_loss = F.binary_cross_entropy(
-                model_out["valid_mask_prob"].clamp(min=1e-6, max=1.0 - 1e-6),
-                valid_mask.to(dtype=x_start.dtype),
-            )
             if completion_label is None:
+                if length is None:
+                    length = valid_frame.sum(dim=1).long()
+                else:
+                    length = length.to(device=x_start.device, dtype=torch.long)
                 completion_target = (length < x_start.shape[1]).to(dtype=x_start.dtype)
             else:
                 completion_target = completion_label.to(device=x_start.device, dtype=x_start.dtype).reshape(-1)
@@ -281,14 +275,10 @@ class Sampler:
                 smooth_loss = torch.zeros((), device=x_start.device)
 
             pelvis_weighted = self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
-            duration_weighted = self.aux_loss_weights.get('duration', 0.2) * duration_loss
-            valid_weighted = self.aux_loss_weights.get('valid_mask', 0.1) * valid_loss
             completion_weighted = self.aux_loss_weights.get('completion', 0.2) * completion_loss
             smooth_weighted = self.aux_loss_weights.get('smoothness', 0.05) * smooth_loss
             aux_total = (
                 pelvis_weighted
-                + duration_weighted
-                + valid_weighted
                 + completion_weighted
                 + smooth_weighted
             )
@@ -297,13 +287,9 @@ class Sampler:
                 {
                     "aux_total": aux_total,
                     "pelvis_traj": pelvis_loss,
-                    "duration": duration_loss,
-                    "valid_mask": valid_loss,
                     "completion": completion_loss,
                     "smoothness": smooth_loss,
                     "pelvis_traj_weighted": pelvis_weighted,
-                    "duration_weighted": duration_weighted,
-                    "valid_mask_weighted": valid_weighted,
                     "completion_weighted": completion_weighted,
                     "smoothness_weighted": smooth_weighted,
                 }
@@ -315,7 +301,23 @@ class Sampler:
         return loss
 
     @torch.no_grad()
-    def p_sample_loop(self, fixed_points, mat, scene_flag, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco):
+    def p_sample_loop(
+            self,
+            fixed_points,
+            mat,
+            scene_flag,
+            text_emb,
+            pelvis_goal,
+            hand_goal,
+            is_pick,
+            need_scene,
+            need_pelvis_dir,
+            pi,
+            need_pi,
+            is_loco,
+            motion_state=None,
+            motion_state_mask=None,
+    ):
         device = next(self.model.parameters()).device
         shape = (self.batch_size, self.dataset.max_window_size, self.channel)
         points = torch.randn(shape, device=device)
@@ -346,6 +348,8 @@ class Sampler:
                 pi,
                 need_pi,
                 is_loco,
+                motion_state,
+                motion_state_mask,
                 return_model_out=(i == 0),
             )
             if i == 0:
@@ -366,6 +370,7 @@ class Sampler:
     @torch.no_grad()
     def p_sample(self, model, x, fixed_points, mat, scene_flag, t, t_index,
                  text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
+                 motion_state=None, motion_state_mask=None,
                  return_model_out=False):
         if self.dataset.load_scene:
             x_orig = transform_points(self.dataset.denormalize_torch(x), mat)
@@ -430,6 +435,8 @@ class Sampler:
             need_pelvis_dir,
             pi,
             need_pi,
+            motion_state=motion_state,
+            motion_state_mask=motion_state_mask,
             return_dict=return_model_out,
         )
         predicted_field = model_out["pred_noise"] if isinstance(model_out, dict) else model_out
@@ -512,11 +519,6 @@ def temporal_upsample(x_anchor: torch.Tensor, target_len: int) -> torch.Tensor:
     return x.permute(0, 2, 1)
 
 
-def end_distribution_to_valid_mask(pi_end: torch.Tensor) -> torch.Tensor:
-    """Convert P(end=t) into soft valid-frame probabilities P(L >= t)."""
-    return torch.flip(torch.cumsum(torch.flip(pi_end, dims=[1]), dim=1), dims=[1])
-
-
 def _batch_bool_mask(value, batch_size: int, device, default: bool = True) -> torch.Tensor:
     if value is None:
         return torch.full((batch_size,), default, dtype=torch.bool, device=device)
@@ -526,6 +528,98 @@ def _batch_bool_mask(value, batch_size: int, device, default: bool = True) -> to
     if value.ndim > 1:
         value = value.reshape(batch_size, -1).any(dim=1)
     return value.reshape(batch_size)
+
+
+class MotionStateEncoder(nn.Module):
+    """Encode short clean boundary history into one conditioning token."""
+
+    def __init__(self, dim_input: int, dim_output: int, state_len: int):
+        super().__init__()
+        self.dim_input = int(dim_input)
+        self.state_len = max(1, int(state_len))
+        self.delta_len = max(1, self.state_len - 1)
+        feature_dim = (
+            self.state_len * self.dim_input
+            + self.delta_len * self.dim_input
+            + 2 * self.dim_input
+            + 8
+        )
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim, dim_output),
+            nn.LayerNorm(dim_output),
+            nn.SiLU(inplace=False),
+            nn.Linear(dim_output, dim_output),
+        )
+
+    def _fit_length(self, value: torch.Tensor, target_len: int) -> torch.Tensor:
+        if value.shape[1] == target_len:
+            return value
+        if value.shape[1] > target_len:
+            return value[:, -target_len:]
+        pad = value[:, :1].repeat(1, target_len - value.shape[1], *([1] * (value.ndim - 2)))
+        return torch.cat([pad, value], dim=1)
+
+    def forward(self, motion_state, motion_state_mask, batch_size: int, device, dtype) -> torch.Tensor:
+        if motion_state is None:
+            return torch.zeros(batch_size, 1, self.net[-1].out_features, device=device, dtype=dtype)
+        motion_state = motion_state.to(device=device, dtype=dtype)
+        if motion_state.ndim == 2:
+            motion_state = motion_state.unsqueeze(0)
+        if motion_state.shape[0] == 1 and batch_size > 1:
+            motion_state = motion_state.repeat(batch_size, 1, 1)
+        motion_state = self._fit_length(motion_state, self.state_len)
+
+        if motion_state.shape[-1] != self.dim_input:
+            raise ValueError(
+                f"motion_state last dim={motion_state.shape[-1]} does not match dim_input={self.dim_input}."
+            )
+
+        if motion_state_mask is None:
+            mask = torch.ones(batch_size, self.state_len, device=device, dtype=dtype)
+        else:
+            mask = motion_state_mask.to(device=device, dtype=torch.bool)
+            if mask.ndim == 1:
+                mask = mask.unsqueeze(0)
+            if mask.shape[0] == 1 and batch_size > 1:
+                mask = mask.repeat(batch_size, 1)
+            mask = self._fit_length(mask, self.state_len).to(dtype=dtype)
+        state = motion_state * mask.unsqueeze(-1)
+
+        if self.state_len > 1:
+            deltas = motion_state[:, 1:] - motion_state[:, :-1]
+            delta_mask = (mask[:, 1:] * mask[:, :-1]).unsqueeze(-1)
+            deltas = deltas * delta_mask
+            denom = delta_mask.sum(dim=1).clamp_min(1.0)
+            mean_delta = deltas.sum(dim=1) / denom
+            root_delta_mean = deltas[..., :3].sum(dim=1) / denom[..., :3]
+            root_delta_last = deltas[:, -1, :3]
+            root_speed = deltas[..., :3].norm(dim=-1)
+            root_speed_mean = root_speed.sum(dim=1, keepdim=True) / delta_mask.squeeze(-1).sum(dim=1, keepdim=True).clamp_min(1.0)
+            root_speed_last = root_speed[:, -1:].clone()
+        else:
+            deltas = motion_state.new_zeros(batch_size, 1, self.dim_input)
+            mean_delta = motion_state.new_zeros(batch_size, self.dim_input)
+            root_delta_mean = motion_state.new_zeros(batch_size, 3)
+            root_delta_last = motion_state.new_zeros(batch_size, 3)
+            root_speed_mean = motion_state.new_zeros(batch_size, 1)
+            root_speed_last = motion_state.new_zeros(batch_size, 1)
+
+        deltas = self._fit_length(deltas, self.delta_len)
+        last_state = state[:, -1]
+        features = torch.cat(
+            [
+                state.reshape(batch_size, -1),
+                deltas.reshape(batch_size, -1),
+                last_state,
+                mean_delta,
+                root_delta_mean,
+                root_delta_last,
+                root_speed_mean,
+                root_speed_last,
+            ],
+            dim=-1,
+        )
+        return self.net(features).unsqueeze(1)
 
 
 class ObjectEncoder(nn.Module):
@@ -728,7 +822,6 @@ class PhaseContactTerminationHeads(nn.Module):
         super().__init__()
         self.phase_head = nn.Linear(dim_model, phase_dim)
         self.contact_head = nn.Linear(dim_model, contact_dim)
-        self.end_head = nn.Linear(dim_model, 1)
         self.completion_head = nn.Sequential(
             nn.Linear(dim_model * 3, dim_model),
             nn.SiLU(inplace=False),
@@ -748,7 +841,6 @@ class PhaseContactTerminationHeads(nn.Module):
         return {
             "phase_latent": self.phase_head(frame_tokens),
             "contact_logits": self.contact_head(frame_tokens),
-            "end_logits": self.end_head(frame_tokens).squeeze(-1),
             "completion_logits": completion_logits,
             "completion_prob": torch.sigmoid(completion_logits),
         }
@@ -807,6 +899,8 @@ class Unet(nn.Module):
         self.object_motion_dim = object_motion_dim
         self.return_full_state = return_full_state
         self.scene_type = scene_type
+        self.use_motion_state = bool(kwargs.get("use_motion_state", False))
+        self.motion_state_len = max(1, int(kwargs.get("motion_state_len", 4)))
         vit_channels = 0
 
         if self.scene_type == 'plane':
@@ -847,6 +941,14 @@ class Unet(nn.Module):
 
         if self.load_pelvis_goal:
             self.embedding_pelvis_goal = GoalEncoder(mode='pelvis', dim_output=dim_model)
+
+        self.embedding_motion_state = None
+        if self.use_motion_state:
+            self.embedding_motion_state = MotionStateEncoder(
+                dim_input=dim_input,
+                dim_output=dim_model,
+                state_len=self.motion_state_len,
+            )
 
         if self.use_object:
             self.embedding_object = ObjectEncoder(dim_output=dim_model, point_dim=object_point_dim)
@@ -918,6 +1020,8 @@ class Unet(nn.Module):
             object_goal=None,
             object_points=None,
             object_present=None,
+            motion_state=None,
+            motion_state_mask=None,
             return_dict=False,
     ):
         batch_size = x.shape[0]
@@ -972,6 +1076,16 @@ class Unet(nn.Module):
                 object_emb = object_emb + object_goal_emb
             cond_tokens.append(t_emb + object_emb)
 
+        if self.use_motion_state:
+            motion_state_emb = self.embedding_motion_state(
+                motion_state,
+                motion_state_mask,
+                batch_size=batch_size,
+                device=device,
+                dtype=x.dtype,
+            )
+            cond_tokens.append(t_emb + motion_state_emb)
+
         cond_tokens = [token.permute(1, 0, 2) for token in cond_tokens]
         cond_token_count = sum(token.shape[0] for token in cond_tokens)
         state_input = self._pack_state_input(x, object_motion, batch_size, device)
@@ -1003,8 +1117,6 @@ class Unet(nn.Module):
                 "phase_latent": aux_out["phase_latent"],
                 "global_phase_latent": aux_out["phase_latent"],
                 "contact_logits": aux_out["contact_logits"],
-                "end_logits": aux_out["end_logits"],
-                "valid_mask_prob": end_distribution_to_valid_mask(torch.softmax(aux_out["end_logits"], dim=-1)),
                 "completion_logits": aux_out["completion_logits"],
                 "completion_prob": aux_out["completion_prob"],
                 "object_present": object_present,
@@ -1049,8 +1161,6 @@ class Unet(nn.Module):
             "phase_latent": aux_out["phase_latent"],
             "global_phase_latent": global_out["phase_latent"],
             "contact_logits": aux_out["contact_logits"],
-            "end_logits": aux_out["end_logits"],
-            "valid_mask_prob": end_distribution_to_valid_mask(torch.softmax(aux_out["end_logits"], dim=-1)),
             "completion_logits": aux_out["completion_logits"],
             "completion_prob": aux_out["completion_prob"],
             "object_present": object_present,

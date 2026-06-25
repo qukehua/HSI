@@ -50,13 +50,14 @@ load_pelvis_goal: true
 load_object: false
 
 auto_regre_num: 2 # prefixed frames for each segment
+# Must match the training checkpoint. Override use_motion_state=false for old checkpoints.
+use_motion_state: true
+motion_state_len: 4
 
 use_aux_losses: false
 completion_pos_weight: 32.0
 aux_loss_weights:
   pelvis_traj: 0
-  duration: 0
-  valid_mask: 0
   completion: 0.2
   smoothness: 0
 

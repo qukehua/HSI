@@ -63,13 +63,9 @@ LOSS_LOG_ORDER = (
     "flow_matching",
     "aux_total",
     "pelvis_traj_weighted",
-    "duration_weighted",
-    "valid_mask_weighted",
     "completion_weighted",
     "smoothness_weighted",
     "pelvis_traj",
-    "duration",
-    "valid_mask",
     "completion",
     "smoothness",
 )
@@ -211,6 +207,8 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
             object_motion=extra.get("object_motion"),
             object_points=extra.get("object_points"),
             object_goal=extra.get("object_goal"),
+            motion_state=extra.get("motion_state"),
+            motion_state_mask=extra.get("motion_state_mask"),
             return_loss_dict=True,
         )
         update_loss_totals(total_losses, loss, batch_size)
@@ -320,6 +318,8 @@ def train_ddp(rank, world_size, cfg):
                 object_motion=extra.get("object_motion"),
                 object_points=extra.get("object_points"),
                 object_goal=extra.get("object_goal"),
+                motion_state=extra.get("motion_state"),
+                motion_state_mask=extra.get("motion_state_mask"),
                 return_loss_dict=True,
             )
             loss = loss_dict["total"]

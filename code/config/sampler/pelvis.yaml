@@ -6,6 +6,8 @@ pelvis:
   batch_size: ${batch_size}
   channel: ${times:${dataset.nb_joints},3}
   auto_regre_num: ${auto_regre_num}
+  use_motion_state: ${use_motion_state}
+  motion_state_len: ${motion_state_len}
   timesteps: 50
   objective: flow_matching
   beta_schedule: linear

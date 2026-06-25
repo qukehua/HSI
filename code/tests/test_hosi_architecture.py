@@ -1,6 +1,6 @@
 import torch
 
-from models.synhsi import DynamicSceneQuery, Unet, end_distribution_to_valid_mask, temporal_upsample
+from models.synhsi import DynamicSceneQuery, Unet, temporal_upsample
 
 
 def make_inputs(batch_size=2, frames=16, motion_dim=66):
@@ -63,18 +63,60 @@ def test_unet_object_switch_allows_missing_object_inputs():
     assert pred["human_motion"].shape == x.shape
     assert pred["object_motion"].shape == (x.shape[0], x.shape[1], 9)
     assert pred["object_motion"][1].abs().max().item() == 0.0
-    assert pred["end_logits"].shape == x.shape[:2]
     assert pred["completion_logits"].shape == x.shape[:1]
     assert pred["completion_prob"].shape == x.shape[:1]
 
 
-def test_mask_and_upsample_utilities():
-    pi = torch.zeros(1, 5)
-    pi[0, 2] = 1.0
-    mask = end_distribution_to_valid_mask(pi)
-    expected = torch.tensor([[1, 1, 1, 0, 0]], dtype=mask.dtype)
-    assert torch.allclose(mask, expected)
+def test_unet_motion_state_token_is_optional_and_shapes_match():
+    x, timesteps, text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi = make_inputs()
+    model = Unet(
+        dim_model=32,
+        num_heads=4,
+        num_layers=1,
+        dropout_p=0.0,
+        dim_input=x.shape[-1],
+        dim_output=x.shape[-1],
+        load_scene=False,
+        load_object=False,
+        use_motion_state=True,
+        motion_state_len=4,
+    )
+    motion_state = torch.randn(x.shape[0], 4, x.shape[-1])
+    motion_state_mask = torch.ones(x.shape[0], 4, dtype=torch.bool)
+    out = model(
+        x,
+        None,
+        timesteps,
+        text_emb,
+        pelvis_goal,
+        hand_goal,
+        is_pick,
+        need_scene,
+        need_pelvis_dir,
+        pi,
+        need_pi,
+        motion_state=motion_state,
+        motion_state_mask=motion_state_mask,
+    )
+    assert out.shape == x.shape
 
+    out_without_state = model(
+        x,
+        None,
+        timesteps,
+        text_emb,
+        pelvis_goal,
+        hand_goal,
+        is_pick,
+        need_scene,
+        need_pelvis_dir,
+        pi,
+        need_pi,
+    )
+    assert out_without_state.shape == x.shape
+
+
+def test_temporal_upsample_utility():
     anchors = torch.tensor([[[0.0], [2.0]]])
     dense = temporal_upsample(anchors, 5)
     assert torch.allclose(dense.squeeze(-1), torch.tensor([[0.0, 0.5, 1.0, 1.5, 2.0]]))
