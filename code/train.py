@@ -2,6 +2,7 @@ import os
 import sys
 import datetime
 import json
+import math
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -157,12 +158,58 @@ def build_dataset(dataset_cfg):
     return dataset_cls(**cfg_dict)
 
 
-def build_lr_scheduler(optimizer, cfg):
+def build_lr_scheduler(optimizer, cfg, steps_per_epoch):
     if not cfg.get("use_lr_decay", False):
-        return None
-    step_size = int(cfg.get("lr_decay_step_size", 50))
-    gamma = float(cfg.get("lr_decay_gamma", 0.95))
-    return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+        return None, None
+    scheduler_type = str(cfg.get("lr_scheduler", "step")).lower()
+    if scheduler_type in ("step", "steplr"):
+        step_size = int(cfg.get("lr_decay_step_size", 50))
+        gamma = float(cfg.get("lr_decay_gamma", 0.95))
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+        return scheduler, {
+            "type": "step",
+            "interval": "epoch",
+            "step_size": step_size,
+            "gamma": gamma,
+        }
+
+    if scheduler_type not in ("cosine", "warmup_cosine", "cosine_warmup"):
+        raise ValueError(
+            f"Unsupported lr_scheduler='{scheduler_type}'. "
+            "Expected one of: step, cosine, warmup_cosine."
+        )
+
+    total_steps = int(cfg.get("lr_total_steps", 0) or int(cfg.epochs) * int(steps_per_epoch))
+    warmup_steps = int(cfg.get("lr_warmup_steps", 0) or 0)
+    warmup_epochs = cfg.get("lr_warmup_epochs", None)
+    if warmup_steps <= 0 and warmup_epochs is not None:
+        warmup_steps = int(float(warmup_epochs) * int(steps_per_epoch))
+    warmup_steps = min(max(warmup_steps, 0), total_steps)
+
+    base_lr = float(cfg.lr)
+    min_lr = float(cfg.get("lr_min", 0.0))
+    if min_lr < 0:
+        raise ValueError("lr_min must be non-negative.")
+    if min_lr > base_lr:
+        raise ValueError("lr_min must be <= lr.")
+    min_lr_ratio = min_lr / base_lr if base_lr > 0 else 0.0
+
+    def lr_lambda(current_step):
+        if warmup_steps > 0 and current_step < warmup_steps:
+            return float(current_step + 1) / float(warmup_steps)
+        decay_steps = max(total_steps - warmup_steps, 1)
+        progress = min(max((current_step - warmup_steps) / decay_steps, 0.0), 1.0)
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_decay
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    return scheduler, {
+        "type": "warmup_cosine",
+        "interval": "step",
+        "total_steps": total_steps,
+        "warmup_steps": warmup_steps,
+        "min_lr": min_lr,
+    }
 
 
 def move_lingo_batch(batch, device):
@@ -273,13 +320,9 @@ def train_ddp(rank, world_size, cfg):
     trainer.set_dataset_and_model(synhsi_dataset, model)
 
     optimizer = Adam(model.parameters(), lr=cfg.lr)
-    lr_scheduler = build_lr_scheduler(optimizer, cfg)
+    lr_scheduler, lr_scheduler_info = build_lr_scheduler(optimizer, cfg, len(dataloader))
     if rank == 0 and lr_scheduler is not None:
-        print(
-            f"LR decay enabled: step_size={lr_scheduler.step_size}, "
-            f"gamma={lr_scheduler.gamma}",
-            flush=True,
-        )
+        print(f"LR scheduler enabled: {lr_scheduler_info}", flush=True)
 
     if cfg.use_tensorboard and rank == 0:
         writer = SummaryWriter(log_dir=os.path.join(cfg.exp_dir, 'tensorboard_logs'))
@@ -349,6 +392,8 @@ def train_ddp(rank, world_size, cfg):
 
             loss.backward()
             optimizer.step()
+            if lr_scheduler is not None and lr_scheduler_info["interval"] == "step":
+                lr_scheduler.step()
             progress.set_postfix(
                 loss=f"{loss.item():.4f}",
                 denoise=f"{loss_dict['denoise'].item():.4f}",
@@ -392,10 +437,14 @@ def train_ddp(rank, world_size, cfg):
                         wandb_run.summary["best_val_loss"] = float(best_val_loss)
 
         if lr_scheduler is not None:
-            lr_scheduler.step()
+            if lr_scheduler_info["interval"] == "epoch":
+                lr_scheduler.step()
             if rank == 0:
                 current_lr = optimizer.param_groups[0]["lr"]
-                print(f"Epoch: {epoch}   LR updated to {current_lr:.8f}", flush=True)
+                if lr_scheduler_info["interval"] == "epoch":
+                    print(f"Epoch: {epoch}   LR updated to {current_lr:.8f}", flush=True)
+                else:
+                    print(f"Epoch: {epoch}   LR at epoch end {current_lr:.8f}", flush=True)
                 if writer is not None:
                     writer.add_scalar('LR/epoch', current_lr, epoch)
                 if wandb_run is not None:

@@ -15,6 +15,9 @@ load_state_dict: false
 batch_size: 256
 lr: 0.0001
 use_lr_decay: true
+lr_scheduler: warmup_cosine
+lr_warmup_steps: 5000
+lr_min: 0.00001
 lr_decay_gamma: 0.95
 lr_decay_step_size: 50
 epochs: 1000
