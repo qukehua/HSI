@@ -39,7 +39,7 @@ val_batch_size: ${batch_size}
 exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 
-num_gpus: 8
+num_gpus: 7
 num_workers: 0
 scene_type: occ_two
 max_window_size: 16

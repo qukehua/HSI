@@ -120,8 +120,7 @@ python preprocess_window_dataset.py \
 Train with the LINGO dataloader:
 
 ```bash
-python train.py --config-name config_train \
-  dataset=lingo \
+python train.py --config-name config_train_lingo \
   dataset.folder=/share/qkh/dataset/lingo/window_t16_s3 \
   dataset.scene_source_dir=/share/qkh/dataset/lingo
 ```
