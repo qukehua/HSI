@@ -111,8 +111,8 @@ Create the autoregressive window dataset:
 
 ```bash
 python preprocess_window_dataset.py \
-  --dataset-dir ../dataset/lingo \
-  --output-dir ../dataset/lingo/window_t16_s3 \
+  --dataset-dir /share/qkh/dataset/lingo \
+  --output-dir /share/qkh/dataset/lingo/window_t16_s3 \
   --window-size 16 \
   --step 3
 ```
@@ -122,8 +122,8 @@ Train with the LINGO dataloader:
 ```bash
 python train.py --config-name config_train \
   dataset=lingo \
-  dataset.folder=../dataset/lingo/window_t16_s3 \
-  dataset.scene_source_dir=../dataset/lingo
+  dataset.folder=/share/qkh/dataset/lingo/window_t16_s3 \
+  dataset.scene_source_dir=/share/qkh/dataset/lingo
 ```
 
 The LINGO setting uses `code/config/dataset/lingo.yaml`, with 28 joints and 768-D CLIP text features.

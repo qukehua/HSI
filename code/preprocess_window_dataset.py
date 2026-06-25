@@ -90,8 +90,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Build a LINGO-style autoregressive window dataset from language_motion_dict."
     )
-    parser.add_argument("--dataset-dir", default="../dataset/lingo")
-    parser.add_argument("--output-dir", default="../dataset/lingo/window_t16_s3")
+    parser.add_argument("--dataset-dir", default="/share/qkh/dataset/lingo")
+    parser.add_argument("--output-dir", default="/share/qkh/dataset/lingo/window_t16_s3")
     parser.add_argument(
         "--motion-dict",
         default="language_motion_dict/language_motion_dict__inter_and_loco__16.pkl",
