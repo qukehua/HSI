@@ -5,8 +5,8 @@
 # Files, directories, or globs produced by sample.py or your own sampler.
 # Required. Fill this before running without --generated.
 generated: [/share/qkh/humoworld/results/outputs_test/**/*.pkl]
-# Randomly sample 200 idx; each idx keeps all repeats (30) for 6000 total samples.
-generated_max_idx: 200
+# Randomly sample 100 idx; each idx keeps all repeats (30) for 3000 total samples.
+generated_max_idx: 100
 generated_sample_seed: 42
 
 # GT/reference motions or features for FID, Precision, Recall, and F1.
@@ -56,7 +56,7 @@ feature_frames: 64
 feature_dim: 512
 diversity_pairs: 300
 multimodality_pairs: 10
-precision_k: 3
+precision_k: 10
 
 # Interactive metrics require a trained motion evaluator checkpoint.
 # Train with train_motion_evaluator.py, then set motion_evaluator_checkpoint below.
