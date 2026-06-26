@@ -46,7 +46,7 @@ metrics: all
 output: null
 
 # General motion/evaluation settings.
-fps: 20.0
+fps: 30.0
 seed: 42
 
 # Interactive metrics.
@@ -54,9 +54,9 @@ seed: 42
 # Otherwise set motion_evaluator_checkpoint to a trained evaluator checkpoint.
 feature_frames: 64
 feature_dim: 512
-diversity_pairs: 300
-multimodality_pairs: 10
-precision_k: 10
+diversity_pairs: 200
+multimodality_pairs: 100
+precision_k: 2
 
 # Interactive metrics require a trained motion evaluator checkpoint.
 # Train with train_motion_evaluator.py, then set motion_evaluator_checkpoint below.
