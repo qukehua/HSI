@@ -1021,21 +1021,15 @@ def multimodality(samples: Sequence[MotionSample], features: np.ndarray, pairs: 
     return float(np.nanmean(values)) if values else float("nan")
 
 
-def manifold_precision_recall(real: np.ndarray, fake: np.ndarray, k: int) -> Tuple[float, float, float]:
+def manifold_precision(real: np.ndarray, fake: np.ndarray, k: int) -> float:
     k = max(1, min(k, len(real) - 1, len(fake) - 1))
     if k < 1:
-        return float("nan"), float("nan"), float("nan")
+        return float("nan")
     real_real = pairwise_distances(real, real)
-    fake_fake = pairwise_distances(fake, fake)
     np.fill_diagonal(real_real, np.inf)
-    np.fill_diagonal(fake_fake, np.inf)
     real_radius = np.partition(real_real, k - 1, axis=1)[:, k - 1]
-    fake_radius = np.partition(fake_fake, k - 1, axis=1)[:, k - 1]
     cross = pairwise_distances(fake, real)
-    precision = (cross <= real_radius.reshape(1, -1)).any(axis=1).mean()
-    recall = (cross.T <= fake_radius.reshape(1, -1)).any(axis=1).mean()
-    f1 = 2.0 * precision * recall / (precision + recall + 1e-12)
-    return float(precision), float(recall), float(f1)
+    return float((cross <= real_radius.reshape(1, -1)).any(axis=1).mean())
 
 
 def interactive_metrics(
@@ -1080,10 +1074,7 @@ def interactive_metrics(
     }
     if reference:
         metrics["fid"] = frechet_distance(ref_features, gen_features)
-        precision, recall, f1 = manifold_precision_recall(ref_features, gen_features, args.precision_k)
-        metrics["precision"] = precision
-        metrics["recall"] = recall
-        metrics["f1_score"] = f1
+        metrics["precision"] = manifold_precision(ref_features, gen_features, args.precision_k)
     return metrics
 
 

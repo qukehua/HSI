@@ -176,7 +176,7 @@ The training script instantiates the dataloader from the selected dataset config
 ## Model Evaluation
 
 
-#FID, Diversity, Multi-modality, Precision, Recall, F1
+#FID, Diversity, Multi-modality, Precision
 ```sh
 python evaluation.py ^
   --generated ..\results\outputs\model.pkl ^
@@ -185,7 +185,7 @@ python evaluation.py ^
   --smpl-dir ..\smpl_models
 ```
 
-Use a trained motion evaluator checkpoint to compute FID/Diversity/Precision/Recall/F1 in evaluator embedding space instead of the fallback hand-crafted joint features:
+Use a trained motion evaluator checkpoint to compute FID/Diversity/Precision in evaluator embedding space instead of the fallback hand-crafted joint features:
 
 ```sh
 python evaluation.py ^
