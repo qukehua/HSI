@@ -478,10 +478,14 @@ def make_samples_from_dict(data: Dict, path: Path, args: argparse.Namespace) -> 
         if omomo_object is not None:
             object_list = [omomo_object]
 
-    if not joints_list and {"transl", "body_pose", "global_orient"}.issubset(data.keys()):
-        need_vertices = args.compute_vertices or args.body_points == "vertices"
+    smpl_ready = {"transl", "body_pose", "global_orient"}.issubset(data.keys())
+    need_vertices = args.compute_vertices or args.body_points == "vertices"
+    if not joints_list and smpl_ready:
         joints, vertices = smplx_to_motion(data, args, need_vertices)
         joints_list = [joints]
+        vertices_list = [vertices] if vertices is not None else []
+    elif need_vertices and not vertices_list and smpl_ready:
+        _, vertices = smplx_to_motion(data, args, True)
         vertices_list = [vertices] if vertices is not None else []
 
     if features is not None and not joints_list:

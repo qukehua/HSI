@@ -82,7 +82,7 @@ trajectory_threshold: 0.5
 # scene_grid: [-3, 0, -4, 3, 2, 4, 300, 100, 400]
 scene_occ: /share/qkh/dataset/lingo/Scene
 scene_grid: [-3, 0, -4, 3, 2, 4, 300, 100, 400]
-body_points: auto
+body_points: vertices
 out_of_bounds_occupied: true
 
 # Foot sliding metrics.
@@ -108,5 +108,5 @@ smpl_dir: /share/qkh/humoworld/smpl_models
 gender: male
 device: cuda
 smpl_batch_size: 256
-compute_vertices: false
+compute_vertices: true
 joints_ind: null
