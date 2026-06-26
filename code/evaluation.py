@@ -1132,6 +1132,23 @@ def mpjpe_for_pair(generated: np.ndarray, reference: np.ndarray, args: argparse.
     return float(dist.mean())
 
 
+def trajectory_metrics_for_pair(
+    generated: np.ndarray,
+    reference: np.ndarray,
+    args: argparse.Namespace,
+) -> Dict[str, float]:
+    generated, reference = align_motion_to_reference(generated, reference, args.mpjpe_frame_alignment)
+    joint_id = min(max(int(args.trajectory_joint), 0), generated.shape[1] - 1, reference.shape[1] - 1)
+    pred_traj = generated[:, joint_id]
+    gt_traj = reference[:, joint_id]
+    dist = np.linalg.norm(pred_traj - gt_traj, axis=-1)
+    return {
+        "goal_error": float(dist[-1]),
+        "traj_error": float(dist.mean()),
+        "traj_similarity": float((dist < float(args.trajectory_threshold)).mean()),
+    }
+
+
 def paired_metrics(
     generated: Sequence[MotionSample],
     reference: Optional[Sequence[MotionSample]],
@@ -1146,7 +1163,10 @@ def paired_metrics(
         if key is not None and sample.joints is not None:
             reference_by_id[key] = sample
 
-    values = []
+    mpjpe_values = []
+    goal_errors = []
+    traj_errors = []
+    traj_similarities = []
     for sample in progress_iter(generated, desc="Paired MPJPE", enabled=args.show_progress, total=len(generated)):
         if sample.joints is None:
             continue
@@ -1154,11 +1174,20 @@ def paired_metrics(
         ref = reference_by_id.get(key)
         if ref is None or ref.joints is None:
             continue
-        values.append(mpjpe_for_pair(sample.joints, ref.joints, args))
+        mpjpe_values.append(mpjpe_for_pair(sample.joints, ref.joints, args))
+        traj = trajectory_metrics_for_pair(sample.joints, ref.joints, args)
+        goal_errors.append(traj["goal_error"])
+        traj_errors.append(traj["traj_error"])
+        traj_similarities.append(traj["traj_similarity"])
 
-    if not values:
+    if not mpjpe_values:
         return {}
-    return {"mpjpe": float(np.mean(values))}
+    return {
+        "mpjpe": float(np.mean(mpjpe_values)),
+        "goal_error": float(np.mean(goal_errors)),
+        "traj_error": float(np.mean(traj_errors)),
+        "traj_similarity": float(np.mean(traj_similarities)),
+    }
 
 
 def stable_path_key(path: Path) -> str:
@@ -1658,6 +1687,18 @@ def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
         choices=("resample", "min"),
         default=config_default(config, "mpjpe_frame_alignment", "resample"),
         help="How to align generated/reference frame counts before MPJPE.",
+    )
+    parser.add_argument(
+        "--trajectory-joint",
+        type=int,
+        default=config_default(config, "trajectory_joint", 0),
+        help="Joint id used as p_t for goal/traj metrics. Default 0 is pelvis/root.",
+    )
+    parser.add_argument(
+        "--trajectory-threshold",
+        type=float,
+        default=config_default(config, "trajectory_threshold", 0.5),
+        help="Distance threshold tau in meters for trajectory similarity.",
     )
 
     parser.add_argument("--scene-occ", default=config_default(config, "scene_occ", None), help="Scene occupancy .npy/.npz or a directory of scene files.")

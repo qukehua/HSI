@@ -71,6 +71,11 @@ motion_evaluator_joints_ind: null
 # MPJPE requires generated samples and GT references to share an id such as
 # idx-123 in mm_group_id/test_setting/input_pkl_path.
 mpjpe_frame_alignment: resample
+# Trajectory metrics use p_t from this joint id and compare generated vs GT.
+# Goal error is last-frame distance; Traj. error is mean frame distance;
+# Traj. similarity is the fraction of frames below trajectory_threshold.
+trajectory_joint: 0
+trajectory_threshold: 0.5
 
 # Scene penetration metrics.
 # Use dataset/Scene_vis with the default eval grid, or dataset/Scene with:
