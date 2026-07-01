@@ -29,7 +29,6 @@ class Sampler:
         self.use_aux_losses = kwargs.get('use_aux_losses', False)
         self.aux_loss_weights = kwargs.get('aux_loss_weights', {
             'pelvis_traj': 0.5,
-            'smoothness': 0.05,
             'completion': 0.2,
         })
         self.completion_pos_weight = kwargs.get('completion_pos_weight', None)
@@ -234,10 +233,8 @@ class Sampler:
             "aux_total": zero_loss,
             "pelvis_traj": zero_loss,
             "completion": zero_loss,
-            "smoothness": zero_loss,
             "pelvis_traj_weighted": zero_loss,
             "completion_weighted": zero_loss,
-            "smoothness_weighted": zero_loss,
         }
         loss = denoise_loss
 
@@ -268,19 +265,11 @@ class Sampler:
                 pos_weight=pos_weight,
             )
 
-            if predicted_field.shape[1] > 2:
-                smooth = predicted_field[:, 2:] - 2 * predicted_field[:, 1:-1] + predicted_field[:, :-2]
-                smooth_loss = smooth.pow(2).mean()
-            else:
-                smooth_loss = torch.zeros((), device=x_start.device)
-
             pelvis_weighted = self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
             completion_weighted = self.aux_loss_weights.get('completion', 0.2) * completion_loss
-            smooth_weighted = self.aux_loss_weights.get('smoothness', 0.05) * smooth_loss
             aux_total = (
                 pelvis_weighted
                 + completion_weighted
-                + smooth_weighted
             )
             loss = loss + aux_total
             loss_terms.update(
@@ -288,10 +277,8 @@ class Sampler:
                     "aux_total": aux_total,
                     "pelvis_traj": pelvis_loss,
                     "completion": completion_loss,
-                    "smoothness": smooth_loss,
                     "pelvis_traj_weighted": pelvis_weighted,
                     "completion_weighted": completion_weighted,
-                    "smoothness_weighted": smooth_weighted,
                 }
             )
 

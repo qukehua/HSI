@@ -33,7 +33,7 @@ seg_len: 4 # episode
 speed: 0.8
 
 exp_dir: ${oc.env:ROOT_DIR}/results/
-ckpt_path: ${oc.env:ROOT_DIR}/results/train_fm/checkpoints/best_model.pth
+ckpt_path: ${oc.env:ROOT_DIR}/results/train_fm6.25/checkpoints/best_model.pth
 smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
 
 scene_type: occ_two
@@ -59,7 +59,6 @@ completion_pos_weight: 32.0
 aux_loss_weights:
   pelvis_traj: 0
   completion: 0.2
-  smoothness: 0
 
 num_gpus: 1
 num_workers: 0

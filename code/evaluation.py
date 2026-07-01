@@ -7,6 +7,7 @@ import math
 import os
 import pickle as pkl
 import re
+import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +62,21 @@ _OBJ_VERT_CACHE: Dict[str, np.ndarray] = {}
 def progress_iter(iterable, desc: str, enabled: bool = True, total: Optional[int] = None, leave: bool = False):
     if tqdm is None or not enabled:
         return iterable
-    return tqdm(iterable, desc=desc, total=total, leave=leave)
+    return tqdm(
+        iterable,
+        desc=desc,
+        total=total,
+        leave=leave,
+        file=sys.stderr,
+        dynamic_ncols=True,
+    )
+
+
+def progress_close() -> None:
+    if tqdm is None:
+        return
+    for bar in list(getattr(tqdm, "_instances", ())):
+        bar.close()
 
 
 def progress_write(message: str, enabled: bool = True) -> None:
@@ -70,7 +85,7 @@ def progress_write(message: str, enabled: bool = True) -> None:
     if tqdm is None:
         print(message)
     else:
-        tqdm.write(message)
+        tqdm.write(message, file=sys.stdout)
 
 
 @dataclass
@@ -1545,18 +1560,20 @@ def write_json(path: Optional[str], metrics: Dict[str, Dict[str, float]]) -> Non
     out_path.write_text(json.dumps(metrics, indent=2, sort_keys=True))
 
 
-def print_metrics(metrics: Dict[str, Dict[str, float]]) -> None:
+def print_metrics(metrics: Dict[str, Dict[str, float]], show_progress: bool = True) -> None:
+    progress_close()
+    write = (lambda message: tqdm.write(message, file=sys.stdout)) if tqdm is not None and show_progress else print
     for section, values in metrics.items():
-        print(f"\n[{section}]")
+        write(f"\n[{section}]")
         if not values:
-            print("  skipped")
+            write("  skipped")
             continue
         for key in sorted(values):
             value = values[key]
             if isinstance(value, float) and math.isnan(value):
-                print(f"  {key}: nan")
+                write(f"  {key}: nan")
             else:
-                print(f"  {key}: {value:.6f}")
+                write(f"  {key}: {value:.6f}")
 
 
 def build_argparser(config: Optional[Dict] = None) -> argparse.ArgumentParser:
@@ -1800,7 +1817,7 @@ def main() -> None:
             warnings.warn(f"Reaching metrics skipped: {exc}")
             results["reaching"] = {}
 
-    print_metrics(results)
+    print_metrics(results, show_progress=args.show_progress)
     write_json(args.output, results)
 
 

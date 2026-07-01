@@ -62,7 +62,6 @@ completion_pos_weight: 32.0
 aux_loss_weights:
   pelvis_traj: 0.5
   completion: 0
-  smoothness: 0
 
 dataset:
   split: train
