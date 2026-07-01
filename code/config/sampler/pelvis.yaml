@@ -23,3 +23,6 @@ pelvis:
   use_aux_losses: ${use_aux_losses}
   completion_pos_weight: ${completion_pos_weight}
   aux_loss_weights: ${aux_loss_weights}
+  human_object_collision_margin: ${human_object_collision_margin}
+  human_object_collision_num_points: ${human_object_collision_num_points}
+  human_object_collision_joint_ids: ${human_object_collision_joint_ids}

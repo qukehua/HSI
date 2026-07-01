@@ -65,8 +65,10 @@ LOSS_LOG_ORDER = (
     "aux_total",
     "pelvis_traj_weighted",
     "completion_weighted",
+    "human_object_collision_weighted",
     "pelvis_traj",
     "completion",
+    "human_object_collision",
 )
 
 

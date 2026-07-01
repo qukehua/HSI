@@ -1,6 +1,12 @@
 import torch
 
-from models.synhsi import DynamicSceneQuery, Unet, temporal_upsample
+from models.synhsi import (
+    DynamicSceneQuery,
+    HumanObjectCrossQuery,
+    Unet,
+    human_object_collision_loss,
+    temporal_upsample,
+)
 
 
 def make_inputs(batch_size=2, frames=16, motion_dim=66):
@@ -139,3 +145,52 @@ def test_dynamic_scene_query_uses_scene_and_trajectory():
 
     assert tokens_a.shape == (1, 3, 16)
     assert not torch.allclose(tokens_a, tokens_b)
+
+
+def test_human_object_cross_query_uses_object_points_and_presence_mask():
+    torch.manual_seed(0)
+    query = HumanObjectCrossQuery(
+        dim_model=16,
+        dim_human=6,
+        max_object_points=8,
+        collision_margin=0.2,
+    )
+    human = torch.zeros(2, 4, 6)
+    object_points = torch.randn(2, 12, 3)
+    object_present = torch.tensor([True, False])
+
+    tokens = query(human, object_points, object_present)
+    shifted_tokens = query(human, object_points + 0.5, object_present)
+
+    assert tokens.shape == (2, 4, 16)
+    assert tokens[1].abs().max().item() == 0.0
+    assert not torch.allclose(tokens[0], shifted_tokens[0])
+
+
+def test_human_object_collision_loss_penalizes_close_points():
+    human = torch.zeros(1, 2, 6)
+    valid_mask = torch.ones(1, 2, dtype=torch.bool)
+    object_present = torch.tensor([True])
+
+    close_object = torch.zeros(1, 4, 3)
+    far_object = torch.full((1, 4, 3), 10.0)
+
+    close_loss = human_object_collision_loss(
+        human,
+        close_object,
+        object_present,
+        valid_mask,
+        margin=0.2,
+        max_object_points=4,
+    )
+    far_loss = human_object_collision_loss(
+        human,
+        far_object,
+        object_present,
+        valid_mask,
+        margin=0.2,
+        max_object_points=4,
+    )
+
+    assert close_loss.item() > 0.0
+    assert far_loss.item() == 0.0

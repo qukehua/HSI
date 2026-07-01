@@ -56,6 +56,12 @@ load_object: false
 auto_regre_num: 2
 use_motion_state: true
 motion_state_len: 4
+use_human_object_cross_query: true
+human_object_query_num_points: 64
+human_object_query_joint_ids: null
+human_object_collision_margin: 0.05
+human_object_collision_num_points: 128
+human_object_collision_joint_ids: null
 
 # Auxiliary loss switches and weights (passed to sampler.pelvis).
 use_aux_losses: true
@@ -63,6 +69,7 @@ completion_pos_weight: 32.0
 aux_loss_weights:
   pelvis_traj: 0.5
   completion: 0.2
+  human_object_collision: 0
 
 dataset:
   split: train

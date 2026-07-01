@@ -42,6 +42,9 @@ class Sampler:
         self.debug_sampling = kwargs.get('debug_sampling', False)
         self.use_motion_state = kwargs.get('use_motion_state', False)
         self.motion_state_len = int(kwargs.get('motion_state_len', 0) or 0)
+        self.human_object_collision_margin = float(kwargs.get('human_object_collision_margin', 0.05))
+        self.human_object_collision_num_points = int(kwargs.get('human_object_collision_num_points', 128))
+        self.human_object_collision_joint_ids = kwargs.get('human_object_collision_joint_ids', None)
         self.get_scheduler()
 
     def set_dataset_and_model(self, dataset, model):
@@ -233,8 +236,10 @@ class Sampler:
             "aux_total": zero_loss,
             "pelvis_traj": zero_loss,
             "completion": zero_loss,
+            "human_object_collision": zero_loss,
             "pelvis_traj_weighted": zero_loss,
             "completion_weighted": zero_loss,
+            "human_object_collision_weighted": zero_loss,
         }
         loss = denoise_loss
 
@@ -264,12 +269,27 @@ class Sampler:
                 completion_target,
                 pos_weight=pos_weight,
             )
+            pred_x0 = self.predict_x0_from_field(x_noisy, t, predicted_field)
+            human_object_collision_loss_value = human_object_collision_loss(
+                pred_x0,
+                object_points=object_points,
+                object_present=object_present,
+                valid_mask=valid_mask,
+                margin=self.human_object_collision_margin,
+                max_object_points=self.human_object_collision_num_points,
+                joint_ids=self.human_object_collision_joint_ids,
+            )
 
             pelvis_weighted = self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
             completion_weighted = self.aux_loss_weights.get('completion', 0.2) * completion_loss
+            human_object_collision_weighted = (
+                self.aux_loss_weights.get('human_object_collision', 0.0)
+                * human_object_collision_loss_value
+            )
             aux_total = (
                 pelvis_weighted
                 + completion_weighted
+                + human_object_collision_weighted
             )
             loss = loss + aux_total
             loss_terms.update(
@@ -277,8 +297,10 @@ class Sampler:
                     "aux_total": aux_total,
                     "pelvis_traj": pelvis_loss,
                     "completion": completion_loss,
+                    "human_object_collision": human_object_collision_loss_value,
                     "pelvis_traj_weighted": pelvis_weighted,
                     "completion_weighted": completion_weighted,
+                    "human_object_collision_weighted": human_object_collision_weighted,
                 }
             )
 
@@ -286,6 +308,15 @@ class Sampler:
             loss_terms["total"] = loss
             return loss_terms
         return loss
+
+    def predict_x0_from_field(self, x_noisy, t, predicted_field):
+        if self.objective == 'flow_matching':
+            tau = self.flow_time_fraction(t, x_noisy.shape)
+            return x_noisy - tau * predicted_field
+
+        sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_noisy.shape)
+        sqrt_one_minus_alphas_cumprod_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_noisy.shape)
+        return (x_noisy - sqrt_one_minus_alphas_cumprod_t * predicted_field) / sqrt_alphas_cumprod_t.clamp_min(1e-8)
 
     @torch.no_grad()
     def p_sample_loop(
@@ -304,6 +335,10 @@ class Sampler:
             is_loco,
             motion_state=None,
             motion_state_mask=None,
+            object_motion=None,
+            object_goal=None,
+            object_points=None,
+            object_present=None,
     ):
         device = next(self.model.parameters()).device
         shape = (self.batch_size, self.dataset.max_window_size, self.channel)
@@ -337,6 +372,10 @@ class Sampler:
                 is_loco,
                 motion_state,
                 motion_state_mask,
+                object_motion=object_motion,
+                object_goal=object_goal,
+                object_points=object_points,
+                object_present=object_present,
                 return_model_out=(i == 0),
             )
             if i == 0:
@@ -358,6 +397,7 @@ class Sampler:
     def p_sample(self, model, x, fixed_points, mat, scene_flag, t, t_index,
                  text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
                  motion_state=None, motion_state_mask=None,
+                 object_motion=None, object_goal=None, object_points=None, object_present=None,
                  return_model_out=False):
         if self.dataset.load_scene:
             x_orig = transform_points(self.dataset.denormalize_torch(x), mat)
@@ -422,6 +462,10 @@ class Sampler:
             need_pelvis_dir,
             pi,
             need_pi,
+            object_motion=object_motion,
+            object_goal=object_goal,
+            object_points=object_points,
+            object_present=object_present,
             motion_state=motion_state,
             motion_state_mask=motion_state_mask,
             return_dict=return_model_out,
@@ -515,6 +559,95 @@ def _batch_bool_mask(value, batch_size: int, device, default: bool = True) -> to
     if value.ndim > 1:
         value = value.reshape(batch_size, -1).any(dim=1)
     return value.reshape(batch_size)
+
+
+def _joint_ids_tensor(joint_ids, num_joints: int, device) -> Optional[torch.Tensor]:
+    if joint_ids is None:
+        return None
+    ids = torch.as_tensor(list(joint_ids), dtype=torch.long, device=device)
+    ids = ids[(ids >= 0) & (ids < num_joints)]
+    if ids.numel() == 0:
+        return None
+    return ids
+
+
+def _prepare_object_points(
+        object_points: Optional[torch.Tensor],
+        batch_size: int,
+        device,
+        dtype,
+        max_object_points: int,
+) -> Optional[torch.Tensor]:
+    if object_points is None or max_object_points == 0:
+        return None
+    if not torch.is_tensor(object_points):
+        object_points = torch.as_tensor(object_points, device=device)
+    object_points = object_points.to(device=device, dtype=dtype)
+    if object_points.ndim == 2:
+        object_points = object_points.unsqueeze(0)
+    if object_points.shape[0] == 1 and batch_size > 1:
+        object_points = object_points.repeat(batch_size, 1, 1)
+    if object_points.shape[0] != batch_size or object_points.shape[-1] != 3:
+        return None
+    if max_object_points > 0 and object_points.shape[1] > max_object_points:
+        sample_idx = torch.linspace(
+            0,
+            object_points.shape[1] - 1,
+            max_object_points,
+            device=device,
+        ).round().long()
+        object_points = object_points.index_select(1, sample_idx)
+    return object_points
+
+
+def human_object_collision_loss(
+        human_motion: torch.Tensor,
+        object_points: Optional[torch.Tensor],
+        object_present: Optional[torch.Tensor],
+        valid_mask: Optional[torch.Tensor],
+        margin: float = 0.05,
+        max_object_points: int = 128,
+        joint_ids=None,
+) -> torch.Tensor:
+    zero = human_motion.new_zeros(())
+    if margin <= 0.0 or object_points is None:
+        return zero
+    batch_size, seq_len, motion_dim = human_motion.shape
+    if motion_dim % 3 != 0:
+        return zero
+
+    object_mask = _batch_bool_mask(object_present, batch_size, human_motion.device, default=False)
+    if not bool(object_mask.any()):
+        return zero
+
+    num_joints = motion_dim // 3
+    human_points = human_motion.reshape(batch_size, seq_len, num_joints, 3)
+    selected_joint_ids = _joint_ids_tensor(joint_ids, num_joints, human_motion.device)
+    if selected_joint_ids is not None:
+        human_points = human_points.index_select(2, selected_joint_ids)
+
+    sampled_object_points = _prepare_object_points(
+        object_points,
+        batch_size=batch_size,
+        device=human_motion.device,
+        dtype=human_motion.dtype,
+        max_object_points=max_object_points,
+    )
+    if sampled_object_points is None or sampled_object_points.shape[1] == 0:
+        return zero
+
+    diff = human_points.unsqueeze(3) - sampled_object_points[:, None, None, :, :]
+    min_dist = torch.sqrt(diff.pow(2).sum(dim=-1).clamp_min(1e-12)).min(dim=-1).values
+    penetration = (float(margin) - min_dist).clamp_min(0.0).pow(2)
+
+    valid = torch.ones(batch_size, seq_len, device=human_motion.device, dtype=human_motion.dtype)
+    if valid_mask is not None:
+        valid = valid_mask.to(device=human_motion.device, dtype=human_motion.dtype)
+    mask = valid.unsqueeze(-1) * object_mask.to(human_motion.dtype).view(batch_size, 1, 1)
+    denom = mask.sum() * human_points.shape[2]
+    if denom <= 0:
+        return zero
+    return (penetration * mask).sum() / denom.clamp_min(1.0)
 
 
 class MotionStateEncoder(nn.Module):
@@ -747,6 +880,93 @@ class DynamicSceneQuery(nn.Module):
         return self.query_mlp(query_feat)
 
 
+class HumanObjectCrossQuery(nn.Module):
+    """Encode nearest object-surface geometry around predicted human joints."""
+
+    def __init__(
+            self,
+            dim_model: int,
+            dim_human: int,
+            query_joint_ids=None,
+            max_object_points: int = 64,
+            collision_margin: float = 0.05,
+    ):
+        super().__init__()
+        if dim_human % 3 != 0:
+            raise ValueError(f"dim_human={dim_human} must be divisible by 3.")
+        self.num_joints = dim_human // 3
+        self.max_object_points = int(max_object_points)
+        self.collision_margin = float(collision_margin)
+
+        use_all_joints = query_joint_ids is None
+        ids = []
+        if query_joint_ids is not None:
+            ids = [int(idx) for idx in list(query_joint_ids) if 0 <= int(idx) < self.num_joints]
+            use_all_joints = len(ids) == 0
+        self.use_all_joints = use_all_joints
+        self.register_buffer(
+            "query_joint_ids",
+            torch.as_tensor(ids, dtype=torch.long),
+            persistent=False,
+        )
+        selected_joints = self.num_joints if self.use_all_joints else len(ids)
+        self.query_mlp = nn.Sequential(
+            nn.Linear(selected_joints * 5, dim_model),
+            nn.LayerNorm(dim_model),
+            nn.SiLU(inplace=False),
+            nn.Linear(dim_model, dim_model),
+        )
+
+    def forward(
+            self,
+            human_motion: torch.Tensor,
+            object_points: Optional[torch.Tensor],
+            object_present: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        batch_size, seq_len, _ = human_motion.shape
+        device = human_motion.device
+        dtype = human_motion.dtype
+        zero_tokens = human_motion.new_zeros(batch_size, seq_len, self.query_mlp[-1].out_features)
+
+        object_mask = _batch_bool_mask(object_present, batch_size, device, default=False)
+        if object_points is None or not bool(object_mask.any()):
+            return zero_tokens
+
+        sampled_object_points = _prepare_object_points(
+            object_points,
+            batch_size=batch_size,
+            device=device,
+            dtype=dtype,
+            max_object_points=self.max_object_points,
+        )
+        if sampled_object_points is None or sampled_object_points.shape[1] == 0:
+            return zero_tokens
+
+        human_points = human_motion.reshape(batch_size, seq_len, self.num_joints, 3)
+        if not self.use_all_joints:
+            human_points = human_points.index_select(2, self.query_joint_ids.to(device=device))
+
+        object_for_query = sampled_object_points[:, None, None, :, :]
+        diff = human_points.unsqueeze(3) - object_for_query
+        dist2 = diff.pow(2).sum(dim=-1).clamp_min(1e-12)
+        min_dist2, min_idx = dist2.min(dim=-1)
+        nearest = object_for_query.expand(-1, seq_len, human_points.shape[2], -1, -1).gather(
+            3,
+            min_idx[..., None, None].expand(-1, -1, -1, 1, 3),
+        ).squeeze(3)
+
+        delta = human_points - nearest
+        min_dist = torch.sqrt(min_dist2)
+        direction = delta / min_dist.unsqueeze(-1).clamp_min(1e-6)
+        margin_violation = (self.collision_margin - min_dist).clamp_min(0.0)
+        query_feat = torch.cat(
+            [direction, min_dist.unsqueeze(-1), margin_violation.unsqueeze(-1)],
+            dim=-1,
+        ).reshape(batch_size, seq_len, -1)
+        tokens = self.query_mlp(query_feat)
+        return tokens * object_mask.to(dtype).view(batch_size, 1, 1)
+
+
 class GlobalBranch(nn.Module):
     def __init__(self, dim_model: int, anchor_stride: int = 4, phase_dim: int = 32):
         super().__init__()
@@ -789,12 +1009,15 @@ class LocalBranch(nn.Module):
             temporal_scene_tokens: torch.Tensor,
             phase_latent: torch.Tensor,
             object_present: torch.Tensor,
+            human_object_tokens: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         traj_feat = self.traj_proj(torch.cat([pelvis_traj_dense, object_traj_dense], dim=-1))
         phase_feat = self.phase_proj(phase_latent)
         scene_tokens = temporal_upsample(temporal_scene_tokens, frame_tokens.shape[1])
         scene_feat = self.scene_proj(scene_tokens)
-        frame_tokens = self.fuse(frame_tokens + traj_feat + phase_feat + scene_feat)
+        if human_object_tokens is None:
+            human_object_tokens = torch.zeros_like(frame_tokens)
+        frame_tokens = self.fuse(frame_tokens + traj_feat + phase_feat + scene_feat + human_object_tokens)
         object_motion = self.object_head(frame_tokens)
         object_motion = object_motion * object_present.to(object_motion.dtype).view(-1, 1, 1)
         return {
@@ -888,6 +1111,10 @@ class Unet(nn.Module):
         self.scene_type = scene_type
         self.use_motion_state = bool(kwargs.get("use_motion_state", False))
         self.motion_state_len = max(1, int(kwargs.get("motion_state_len", 4)))
+        self.use_human_object_cross_query = bool(kwargs.get("use_human_object_cross_query", True))
+        self.human_object_query_num_points = int(kwargs.get("human_object_query_num_points", 64))
+        self.human_object_query_joint_ids = kwargs.get("human_object_query_joint_ids", None)
+        self.human_object_query_margin = float(kwargs.get("human_object_query_margin", 0.05))
         vit_channels = 0
 
         if self.scene_type == 'plane':
@@ -953,6 +1180,7 @@ class Unet(nn.Module):
 
         self.global_branch = None
         self.dynamic_scene_query = None
+        self.human_object_cross_query = None
         self.local_branch = None
         if self.architecture == "global_to_local":
             self.global_branch = GlobalBranch(
@@ -966,6 +1194,14 @@ class Unet(nn.Module):
                 scene_channels=vit_channels if self.load_scene else 0,
                 coord_scale=scene_query_coord_scale,
             )
+            if self.use_object and self.use_human_object_cross_query:
+                self.human_object_cross_query = HumanObjectCrossQuery(
+                    dim_model=dim_model,
+                    dim_human=dim_output,
+                    query_joint_ids=self.human_object_query_joint_ids,
+                    max_object_points=self.human_object_query_num_points,
+                    collision_margin=self.human_object_query_margin,
+                )
             self.local_branch = LocalBranch(
                 dim_model=dim_model,
                 dim_human=dim_output,
@@ -1126,6 +1362,13 @@ class Unet(nn.Module):
             object_geometry=object_points,
             object_present=object_present,
         )
+        human_object_tokens = None
+        if self.human_object_cross_query is not None:
+            human_object_tokens = self.human_object_cross_query(
+                human_motion=x,
+                object_points=object_points,
+                object_present=object_present,
+            )
         local_out = self.local_branch(
             frame_tokens=frame_tokens,
             pelvis_traj_dense=pelvis_dense,
@@ -1133,6 +1376,7 @@ class Unet(nn.Module):
             temporal_scene_tokens=temporal_scene_tokens,
             phase_latent=global_out["phase_latent"],
             object_present=object_present,
+            human_object_tokens=human_object_tokens,
         )
         aux_out = self.heads(local_out["frame_tokens"])
 
