@@ -53,6 +53,12 @@ auto_regre_num: 2 # prefixed frames for each segment
 # Must match the training checkpoint. Override use_motion_state=false for old checkpoints.
 use_motion_state: true
 motion_state_len: 4
+# Must match the training checkpoint. Override use_human_scene_interaction=false for old checkpoints.
+use_human_scene_interaction: true
+human_scene_num_scene_points: 64
+human_scene_num_body_frames: 4
+human_scene_num_heads: 4
+human_scene_occupancy_threshold: 0.5
 use_human_object_cross_query: true
 human_object_query_num_points: 64
 human_object_query_joint_ids: null

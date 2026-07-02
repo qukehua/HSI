@@ -880,6 +880,220 @@ class DynamicSceneQuery(nn.Module):
         return self.query_mlp(query_feat)
 
 
+class HumanSceneInteractionEncoder(nn.Module):
+    """Cross-attend recent clean body points to occupied points in the scene crop."""
+
+    def __init__(
+            self,
+            dim_model: int,
+            dim_human: int,
+            scene_type: Optional[str],
+            num_scene_points: int = 64,
+            num_body_frames: int = 4,
+            num_heads: int = 4,
+            occupancy_threshold: float = 0.5,
+            coord_scale: float = 1.0,
+    ):
+        super().__init__()
+        if dim_human % 3 != 0:
+            raise ValueError(f"dim_human={dim_human} must be divisible by 3.")
+        self.dim_model = int(dim_model)
+        self.dim_human = int(dim_human)
+        self.num_joints = self.dim_human // 3
+        self.scene_type = str(scene_type or "").lower()
+        self.num_scene_points = max(1, int(num_scene_points))
+        self.num_body_frames = max(1, int(num_body_frames))
+        self.occupancy_threshold = float(occupancy_threshold)
+        self.coord_scale = float(coord_scale)
+
+        heads = max(1, int(num_heads))
+        if self.dim_model % heads != 0:
+            heads = 1
+
+        self.body_proj = nn.Sequential(
+            nn.Linear(4, self.dim_model),
+            nn.LayerNorm(self.dim_model),
+            nn.SiLU(inplace=False),
+            nn.Linear(self.dim_model, self.dim_model),
+        )
+        self.scene_proj = nn.Sequential(
+            nn.Linear(3, self.dim_model),
+            nn.LayerNorm(self.dim_model),
+            nn.SiLU(inplace=False),
+            nn.Linear(self.dim_model, self.dim_model),
+        )
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=self.dim_model,
+            num_heads=heads,
+            batch_first=True,
+        )
+        self.out = nn.Sequential(
+            nn.LayerNorm(self.dim_model),
+            nn.Linear(self.dim_model, self.dim_model),
+        )
+
+    def _fit_length(self, value: torch.Tensor, target_len: int, take_last: bool = True) -> torch.Tensor:
+        if value.shape[1] == target_len:
+            return value
+        if value.shape[1] > target_len:
+            return value[:, -target_len:] if take_last else value[:, :target_len]
+        pad = value[:, :1].repeat(1, target_len - value.shape[1], *([1] * (value.ndim - 2)))
+        return torch.cat([pad, value], dim=1)
+
+    def _body_points(
+            self,
+            human_motion: torch.Tensor,
+            motion_state: Optional[torch.Tensor],
+            motion_state_mask: Optional[torch.Tensor],
+    ):
+        batch_size = human_motion.shape[0]
+        device = human_motion.device
+        dtype = human_motion.dtype
+
+        if motion_state is None:
+            source = human_motion[:, :1]
+            source = self._fit_length(source, self.num_body_frames, take_last=False)
+            frame_mask = torch.ones(batch_size, self.num_body_frames, device=device, dtype=torch.bool)
+        else:
+            source = motion_state.to(device=device, dtype=dtype)
+            if source.ndim == 2:
+                source = source.unsqueeze(0)
+            if source.shape[0] == 1 and batch_size > 1:
+                source = source.repeat(batch_size, 1, 1)
+            source = self._fit_length(source, self.num_body_frames, take_last=True)
+
+            if motion_state_mask is None:
+                frame_mask = torch.ones(batch_size, self.num_body_frames, device=device, dtype=torch.bool)
+            else:
+                frame_mask = motion_state_mask.to(device=device, dtype=torch.bool)
+                if frame_mask.ndim == 1:
+                    frame_mask = frame_mask.unsqueeze(0)
+                if frame_mask.shape[0] == 1 and batch_size > 1:
+                    frame_mask = frame_mask.repeat(batch_size, 1)
+                frame_mask = self._fit_length(frame_mask, self.num_body_frames, take_last=True)
+
+        if source.shape[-1] != self.dim_human:
+            raise ValueError(
+                f"human-scene body dim={source.shape[-1]} does not match dim_human={self.dim_human}."
+            )
+
+        points = source.reshape(batch_size, self.num_body_frames, self.num_joints, 3)
+        valid = frame_mask[:, :, None].expand(-1, -1, self.num_joints).reshape(batch_size, -1)
+        points = points.reshape(batch_size, -1, 3)
+
+        has_valid = valid.any(dim=1, keepdim=True)
+        first_valid = torch.zeros_like(valid)
+        first_valid[:, :1] = True
+        points = torch.where(has_valid.unsqueeze(-1), points, torch.zeros_like(points))
+        valid = torch.where(has_valid, valid, first_valid)
+        points = points * valid.to(dtype).unsqueeze(-1)
+
+        time = torch.linspace(-1.0, 0.0, self.num_body_frames, device=device, dtype=dtype)
+        time = time.view(1, self.num_body_frames, 1, 1).expand(batch_size, -1, self.num_joints, -1)
+        time = time.reshape(batch_size, -1, 1)
+        return torch.cat([points, time], dim=-1), valid
+
+    def _select_scene_grid(self, scene_grid: torch.Tensor):
+        if scene_grid is None or scene_grid.ndim != 4:
+            return None, "occ"
+        scene_kind = "plane" if "plane" in self.scene_type else "occ"
+        if self.scene_type == "occ_two":
+            channels = max(1, scene_grid.shape[1] // 2)
+            return scene_grid[:, :channels], "occ"
+        if self.scene_type == "plane_two":
+            return scene_grid[:, :1], "plane"
+        return scene_grid, scene_kind
+
+    def _scene_points_from_occ(self, scene_grid: torch.Tensor):
+        batch_size, channels, height, width = scene_grid.shape
+        device = scene_grid.device
+        dtype = scene_grid.dtype
+        values = scene_grid.reshape(batch_size, -1)
+        k = min(self.num_scene_points, values.shape[1])
+        top_values, top_idx = torch.topk(values, k=k, dim=1)
+
+        scale = max(self.coord_scale, 1e-6)
+        y = torch.linspace(-1.0, 1.0, channels, device=device, dtype=dtype)
+        x = torch.linspace(-scale, scale, height, device=device, dtype=dtype)
+        z = torch.linspace(-scale, scale, width, device=device, dtype=dtype)
+        yy, xx, zz = torch.meshgrid(y, x, z, indexing="ij")
+        base_coords = torch.stack([xx, yy, zz], dim=-1).reshape(-1, 3)
+        points = base_coords.index_select(0, top_idx.reshape(-1)).reshape(batch_size, k, 3)
+
+        valid = top_values > self.occupancy_threshold
+        has_valid = valid.any(dim=1, keepdim=True)
+        first_valid = torch.zeros_like(valid)
+        first_valid[:, :1] = True
+        points = torch.where(has_valid.unsqueeze(-1), points, torch.zeros_like(points))
+        valid = torch.where(has_valid, valid, first_valid)
+        points = points * valid.to(dtype).unsqueeze(-1)
+        return points, valid
+
+    def _scene_points_from_plane(self, scene_grid: torch.Tensor):
+        batch_size, _, height, width = scene_grid.shape
+        device = scene_grid.device
+        dtype = scene_grid.dtype
+        height_map = scene_grid[:, :1].reshape(batch_size, -1)
+        k = min(self.num_scene_points, height_map.shape[1])
+        top_values, top_idx = torch.topk(height_map, k=k, dim=1)
+
+        scale = max(self.coord_scale, 1e-6)
+        x = torch.linspace(-scale, scale, height, device=device, dtype=dtype)
+        z = torch.linspace(-scale, scale, width, device=device, dtype=dtype)
+        xx, zz = torch.meshgrid(x, z, indexing="ij")
+        base_xz = torch.stack([xx, zz], dim=-1).reshape(-1, 2)
+        xz = base_xz.index_select(0, top_idx.reshape(-1)).reshape(batch_size, k, 2)
+        y = top_values.mul(2.0).sub(1.0).unsqueeze(-1)
+        points = torch.cat([xz[..., :1], y, xz[..., 1:]], dim=-1)
+        valid = torch.ones(batch_size, k, device=device, dtype=torch.bool)
+        return points, valid
+
+    def _scene_points(self, scene_grid: Optional[torch.Tensor], batch_size: int, device, dtype):
+        selected_grid, scene_kind = self._select_scene_grid(scene_grid)
+        if selected_grid is None or selected_grid.shape[1] == 0:
+            points = torch.zeros(batch_size, 1, 3, device=device, dtype=dtype)
+            valid = torch.ones(batch_size, 1, device=device, dtype=torch.bool)
+            return points, valid
+
+        selected_grid = selected_grid.to(device=device, dtype=dtype)
+        if scene_kind == "plane":
+            return self._scene_points_from_plane(selected_grid)
+        return self._scene_points_from_occ(selected_grid)
+
+    def forward(
+            self,
+            human_motion: torch.Tensor,
+            scene_grid: Optional[torch.Tensor],
+            need_scene: Optional[torch.Tensor] = None,
+            motion_state: Optional[torch.Tensor] = None,
+            motion_state_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        batch_size = human_motion.shape[0]
+        device = human_motion.device
+        dtype = human_motion.dtype
+
+        body_points, body_valid = self._body_points(human_motion, motion_state, motion_state_mask)
+        scene_points, scene_valid = self._scene_points(scene_grid, batch_size, device, dtype)
+
+        body_tokens = self.body_proj(body_points) * body_valid.to(dtype).unsqueeze(-1)
+        scene_tokens = self.scene_proj(scene_points) * scene_valid.to(dtype).unsqueeze(-1)
+        attended, _ = self.cross_attn(
+            query=body_tokens,
+            key=scene_tokens,
+            value=scene_tokens,
+            key_padding_mask=torch.logical_not(scene_valid),
+            need_weights=False,
+        )
+
+        body_weight = body_valid.to(dtype).unsqueeze(-1)
+        pooled = (attended * body_weight).sum(dim=1) / body_weight.sum(dim=1).clamp_min(1.0)
+        token = self.out(pooled).unsqueeze(1)
+        if need_scene is not None:
+            scene_mask = _batch_bool_mask(need_scene, batch_size, device, default=True)
+            token = token * scene_mask.to(dtype).view(batch_size, 1, 1)
+        return token
+
+
 class HumanObjectCrossQuery(nn.Module):
     """Encode nearest object-surface geometry around predicted human joints."""
 
@@ -1111,6 +1325,11 @@ class Unet(nn.Module):
         self.scene_type = scene_type
         self.use_motion_state = bool(kwargs.get("use_motion_state", False))
         self.motion_state_len = max(1, int(kwargs.get("motion_state_len", 4)))
+        self.use_human_scene_interaction = bool(kwargs.get("use_human_scene_interaction", False))
+        self.human_scene_num_scene_points = int(kwargs.get("human_scene_num_scene_points", 64))
+        self.human_scene_num_body_frames = int(kwargs.get("human_scene_num_body_frames", self.motion_state_len))
+        self.human_scene_num_heads = int(kwargs.get("human_scene_num_heads", 4))
+        self.human_scene_occupancy_threshold = float(kwargs.get("human_scene_occupancy_threshold", 0.5))
         self.use_human_object_cross_query = bool(kwargs.get("use_human_object_cross_query", True))
         self.human_object_query_num_points = int(kwargs.get("human_object_query_num_points", 64))
         self.human_object_query_joint_ids = kwargs.get("human_object_query_joint_ids", None)
@@ -1167,6 +1386,19 @@ class Unet(nn.Module):
         if self.use_object:
             self.embedding_object = ObjectEncoder(dim_output=dim_model, point_dim=object_point_dim)
             self.embedding_object_goal = VectorConditionEncoder(dim_input=3, dim_output=dim_model)
+
+        self.embedding_human_scene = None
+        if self.use_human_scene_interaction and self.load_scene:
+            self.embedding_human_scene = HumanSceneInteractionEncoder(
+                dim_model=dim_model,
+                dim_human=dim_input,
+                scene_type=scene_type,
+                num_scene_points=self.human_scene_num_scene_points,
+                num_body_frames=self.human_scene_num_body_frames,
+                num_heads=self.human_scene_num_heads,
+                occupancy_threshold=self.human_scene_occupancy_threshold,
+                coord_scale=scene_query_coord_scale,
+            )
 
         encoder_layer = nn.TransformerEncoderLayer(d_model=dim_model,
                                                    nhead=num_heads,
@@ -1308,6 +1540,16 @@ class Unet(nn.Module):
                 dtype=x.dtype,
             )
             cond_tokens.append(t_emb + motion_state_emb)
+
+        if self.embedding_human_scene is not None:
+            human_scene_emb = self.embedding_human_scene(
+                human_motion=x,
+                scene_grid=cond,
+                need_scene=need_scene,
+                motion_state=motion_state,
+                motion_state_mask=motion_state_mask,
+            )
+            cond_tokens.append(t_emb + human_scene_emb)
 
         cond_tokens = [token.permute(1, 0, 2) for token in cond_tokens]
         cond_token_count = sum(token.shape[0] for token in cond_tokens)

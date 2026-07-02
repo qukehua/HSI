@@ -18,6 +18,11 @@ synhsi_body:
   load_object: ${load_object}
   use_motion_state: ${use_motion_state}
   motion_state_len: ${motion_state_len}
+  use_human_scene_interaction: ${use_human_scene_interaction}
+  human_scene_num_scene_points: ${human_scene_num_scene_points}
+  human_scene_num_body_frames: ${human_scene_num_body_frames}
+  human_scene_num_heads: ${human_scene_num_heads}
+  human_scene_occupancy_threshold: ${human_scene_occupancy_threshold}
   use_human_object_cross_query: ${use_human_object_cross_query}
   human_object_query_num_points: ${human_object_query_num_points}
   human_object_query_margin: ${human_object_collision_margin}

@@ -3,6 +3,7 @@ import torch
 from models.synhsi import (
     DynamicSceneQuery,
     HumanObjectCrossQuery,
+    HumanSceneInteractionEncoder,
     Unet,
     human_object_collision_loss,
     temporal_upsample,
@@ -165,6 +166,37 @@ def test_human_object_cross_query_uses_object_points_and_presence_mask():
     assert tokens.shape == (2, 4, 16)
     assert tokens[1].abs().max().item() == 0.0
     assert not torch.allclose(tokens[0], shifted_tokens[0])
+
+
+def test_human_scene_interaction_encoder_uses_body_and_scene():
+    torch.manual_seed(0)
+    encoder = HumanSceneInteractionEncoder(
+        dim_model=16,
+        dim_human=6,
+        scene_type="occ_two",
+        num_scene_points=4,
+        num_body_frames=2,
+        num_heads=4,
+    )
+    human = torch.zeros(1, 3, 6)
+    motion_state = torch.zeros(1, 2, 6)
+    motion_state_mask = torch.ones(1, 2, dtype=torch.bool)
+    need_scene = torch.ones(1, dtype=torch.bool)
+
+    scene_a = torch.zeros(1, 4, 4, 4)
+    scene_b = torch.zeros(1, 4, 4, 4)
+    scene_a[:, 0, 0, 0] = 1.0
+    scene_b[:, 1, 3, 3] = 1.0
+
+    token_a = encoder(human, scene_a, need_scene, motion_state, motion_state_mask)
+    token_b = encoder(human, scene_b, need_scene, motion_state, motion_state_mask)
+    token_no_scene = encoder(human, scene_a, torch.zeros(1, dtype=torch.bool), motion_state, motion_state_mask)
+    token_empty = encoder(human, torch.zeros_like(scene_a), need_scene, motion_state, motion_state_mask)
+
+    assert token_a.shape == (1, 1, 16)
+    assert torch.isfinite(token_empty).all()
+    assert token_no_scene.abs().max().item() == 0.0
+    assert not torch.allclose(token_a, token_b)
 
 
 def test_human_object_collision_loss_penalizes_close_points():
