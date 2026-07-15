@@ -1,0 +1,42 @@
+name: omomo
+_target_: datasets.omomo.OmomoDataset
+folder: ${oc.env:ROOT_DIR}/dataset/OMOMO/data
+device: ${device}
+batch_size: ${batch_size}
+step: 1
+nb_voxels: [32, 32, 32]
+mesh_grid: [-0.6, 0.6, 0.1, 1.2, -0.6, 0.6]
+vis: ${vis}
+start_type: ${start_type}
+train: ${train}
+load_language: ${load_language}
+load_scene: ${load_scene}
+load_hand_goal: ${load_hand_goal}
+load_pelvis_goal: ${load_pelvis_goal}
+load_object: ${load_object}
+use_pi: ${use_pi}
+max_window_size: ${max_window_size}
+seq_len: ${max_window_size}
+motion_state_len: ${motion_state_len}
+motion_state_prefix_len: ${auto_regre_num}
+split: null
+
+# OMOMO provides an official subject split: subjects 1-15 are training data,
+# while subjects 16-17 are test data. No generated splits/*.npy are used.
+train_file: train_diffusion_manip_window_120_cano_joints24.p
+test_file: test_diffusion_manip_window_120_processed_joints24.p
+stats_file: min_max_mean_std_data_window_120_cano_joints24.p
+object_mesh_dir: captured_objects
+load_train: true
+load_test: false
+max_train_samples: 0
+max_test_samples: 0
+mmap_mode: null
+
+object_num_points: 1024
+normalize: true
+convert_z_up_to_y_up: true
+
+joints_ind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+nb_joints: 24
+language_feature_dim: 1

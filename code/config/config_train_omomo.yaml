@@ -1,0 +1,89 @@
+defaults:
+  - dataset: omomo
+  - guidance:
+      - pelvis
+  - model:
+      - synhsi_body
+  - sampler:
+      - pelvis
+  - _self_
+
+exp_name: train_fm_omomo
+train: true
+scene_mode: test
+load_state_dict: false
+batch_size: 32
+lr: 0.0001
+use_lr_decay: true
+lr_scheduler: warmup_cosine
+lr_warmup_steps: 5000
+lr_min: 0.00001
+lr_decay_gamma: 0.95
+lr_decay_step_size: 50
+epochs: 1000
+device: cuda:0
+ckpt_name: None
+use_tensorboard: true
+use_wandb: true
+wandb_project: HSI-ours
+wandb_entity: null
+wandb_run_name: ${exp_name}
+wandb_mode: online
+log_interval: 10
+ckpt_interval: 50
+
+# OMOMO has official train/test files but no official validation set. Keep the
+# test subjects untouched during training. To monitor on them explicitly, set
+# use_validation=true, dataset.load_test=true, and val_split=test.
+use_validation: false
+val_split: test
+val_interval: 1
+val_batch_size: ${batch_size}
+
+exp_dir: ${oc.env:ROOT_DIR}/results/${exp_name}
+smpl_dir: ${oc.env:ROOT_DIR}/smpl_models
+
+num_gpus: 1
+num_workers: 0
+scene_type: occ_two
+max_window_size: 120
+motion_len: 120
+vis: false
+start_type: stand
+
+load_language: false
+load_scene: false
+use_pi: false
+load_hand_goal: false
+load_pelvis_goal: false
+load_object: true
+auto_regre_num: 2
+use_motion_state: true
+motion_state_len: 4
+use_human_scene_interaction: false
+human_scene_num_scene_points: 64
+human_scene_num_body_frames: 4
+human_scene_num_heads: 4
+human_scene_occupancy_threshold: 0.5
+use_human_object_cross_query: true
+human_object_query_num_points: 64
+human_object_query_joint_ids: null
+human_object_collision_margin: 0.05
+human_object_collision_num_points: 128
+human_object_collision_joint_ids: null
+
+use_aux_losses: true
+completion_pos_weight: 32.0
+aux_loss_weights:
+  pelvis_traj: 0
+  completion: 0
+  human_object_collision: 0.05
+
+dataset:
+  split: train
+
+ckpt_path: None
+
+hydra:
+  run:
+    dir: ${exp_dir}

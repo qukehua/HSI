@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2208" height="1374" class="pipeline-svg" viewBox="0 0 736 458" role="img" aria-labelledby="interflow-title interflow-desc">
+    <title id="interflow-title">InterFlow trajectory-aware flow matching pipeline</title>
+    <desc id="interflow-desc">Three-panel method figure showing the global-to-local conditional velocity field, the enhanced window bridging token with human-scene cross-attention, and completion-aware autoregressive ODE rollout.</desc>
+
+    <style>
+  .pipeline-svg { background: #FFFFFF; font-family: Arial, Helvetica, sans-serif; }
+  .label { fill: #172033; font-size: 13.2px; font-weight: 600; }
+  .copy { fill: #172033; font-size: 11.5px; font-weight: 400; }
+  .note { fill: #5E6A7A; font-size: 10.5px; font-weight: 400; }
+  .text-small { font-size: 9.6px; }
+  .neutral { fill: #F5F7FA; stroke: #C8CFD9; }
+  .motion { fill: #EAF2FB; stroke: #4478B8; }
+  .trajectory { fill: #E8F7F5; stroke: #229B96; }
+  .history { fill: #F1ECFA; stroke: #8066B7; }
+  .interaction { fill: #FFF2E6; stroke: #D98232; }
+  .output { fill: #EAF6EE; stroke: #4A9A68; }
+  .loss { fill: #FBECEE; stroke: #C65B62; }
+  .outline { fill: none; stroke: #C8CFD9; }
+  .ink { fill: none; stroke: #172033; }
+  .muted-ink { fill: none; stroke: #5E6A7A; }
+  .series-1-ink { fill: none; stroke: #4478B8; }
+  .series-2-ink { fill: none; stroke: #229B96; }
+  .series-3-ink { fill: none; stroke: #8066B7; }
+  .series-4-ink { fill: none; stroke: #D98232; }
+  .series-5-ink { fill: none; stroke: #4A9A68; }
+  .wire { fill: none; stroke: #5E6A7A; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+  .wire-dashed { fill: none; stroke: #5E6A7A; stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 4 3; }
+  .accent-wire { fill: none; stroke: #229B96; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .node { stroke-width: 1.15; }
+  .hairline { stroke-width: 0.9; }
+</style>
+<defs>
+      <marker id="arrow-neutral" markerWidth="7" markerHeight="7" refX="6.1" refY="3.5" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L7,3.5 L0,7 Z" fill="#5E6A7A"></path>
+      </marker>
+      <marker id="arrow-trajectory" markerWidth="7" markerHeight="7" refX="6.1" refY="3.5" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L7,3.5 L0,7 Z" fill="#229B96"></path>
+      </marker>
+      <marker id="arrow-history" markerWidth="7" markerHeight="7" refX="6.1" refY="3.5" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L7,3.5 L0,7 Z" fill="#8066B7"></path>
+      </marker>
+      <marker id="arrow-output" markerWidth="7" markerHeight="7" refX="6.1" refY="3.5" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L7,3.5 L0,7 Z" fill="#4A9A68"></path>
+      </marker>
+      <pattern id="voxel-grid" width="8" height="8" patternUnits="userSpaceOnUse">
+        <path d="M8 0H0V8" class="outline hairline"></path>
+      </pattern>
+    </defs>
+
+    <text x="14" y="16" class="label">(a) Global-to-local trajectory-aware Flow Matching</text>
+    <path d="M14 25H722" class="outline hairline"></path>
+
+    <g aria-label="Multimodal input conditions">
+      <rect x="14" y="37" width="104" height="199" rx="9" class="neutral node"></rect>
+      <text x="24" y="54" class="label">Conditions</text>
+
+      <rect x="24" y="65" width="39" height="47" rx="7" class="motion node"></rect>
+      <circle cx="43.5" cy="78" r="3.4" class="series-1-ink hairline"></circle>
+      <path d="M43.5 81.5V94M43.5 85L36.5 90M43.5 85L50.5 90M43.5 94L37.8 102M43.5 94L49.2 102" class="series-1-ink"></path>
+      <text x="43.5" y="108" text-anchor="middle" class="note text-small">motion xτ</text>
+
+      <rect x="69" y="65" width="39" height="47" rx="7" class="trajectory node"></rect>
+      <rect x="77" y="73" width="23" height="23" fill="url(#voxel-grid)" class="outline hairline"></rect>
+      <circle cx="82" cy="88" r="2.2" fill="#229B96"></circle>
+      <circle cx="94" cy="79" r="2.2" fill="#229B96"></circle>
+      <text x="88.5" y="108" text-anchor="middle" class="note text-small">scene S</text>
+
+      <rect x="24" y="120" width="39" height="47" rx="7" class="neutral node"></rect>
+      <path d="M31 132H55M31 138H51M31 144H53" class="muted-ink"></path>
+      <text x="43.5" y="162" text-anchor="middle" class="note text-small">text V</text>
+
+      <rect x="69" y="120" width="39" height="47" rx="7" class="trajectory node"></rect>
+      <circle cx="88.5" cy="138" r="7" class="series-2-ink"></circle>
+      <circle cx="88.5" cy="138" r="2.5" fill="#229B96"></circle>
+      <text x="88.5" y="162" text-anchor="middle" class="note text-small">goal G</text>
+
+      <rect x="24" y="175" width="39" height="47" rx="7" class="interaction node"></rect>
+      <circle cx="36" cy="190" r="2.1" fill="#D98232"></circle>
+      <circle cx="50" cy="187" r="2.1" fill="#D98232"></circle>
+      <circle cx="52" cy="200" r="2.1" fill="#D98232"></circle>
+      <circle cx="37" cy="203" r="2.1" fill="#D98232"></circle>
+      <path d="M36 190L50 187L52 200L37 203Z" class="series-4-ink"></path>
+      <text x="43.5" y="217" text-anchor="middle" class="note text-small">object O</text>
+
+      <rect x="69" y="175" width="39" height="47" rx="7" class="history node"></rect>
+      <path d="M77 197C81 187 87 188 90 196S99 204 102 190" class="series-3-ink"></path>
+      <circle cx="77" cy="197" r="2" fill="#8066B7"></circle>
+      <circle cx="90" cy="196" r="2" fill="#8066B7"></circle>
+      <circle cx="102" cy="190" r="2" fill="#8066B7"></circle>
+      <text x="88.5" y="217" text-anchor="middle" class="note text-small">history Hᵢ</text>
+    </g>
+
+    <g aria-label="Shared conditional transformer">
+      <path d="M118 90H133" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <path d="M118 145H128V119H133" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <path d="M118 198H128V176H133" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <rect x="136" y="55" width="123" height="161" rx="10" class="motion node"></rect>
+      <text x="197.5" y="75" text-anchor="middle" class="label">Shared conditional</text>
+      <text x="197.5" y="91" text-anchor="middle" class="label">Transformer</text>
+
+      <g aria-label="Condition tokens">
+        <rect x="149" y="104" width="23" height="27" rx="5" class="trajectory node"></rect>
+        <text x="160.5" y="121" text-anchor="middle" class="copy text-small">S</text>
+        <rect x="177" y="104" width="23" height="27" rx="5" class="neutral node"></rect>
+        <text x="188.5" y="121" text-anchor="middle" class="copy text-small">V</text>
+        <rect x="205" y="104" width="23" height="27" rx="5" class="trajectory node"></rect>
+        <text x="216.5" y="121" text-anchor="middle" class="copy text-small">G</text>
+        <rect x="233" y="104" width="13" height="27" rx="5" class="interaction node"></rect>
+        <text x="239.5" y="121" text-anchor="middle" class="copy text-small">O</text>
+        <rect x="149" y="139" width="97" height="25" rx="5" class="history node"></rect>
+        <text x="197.5" y="155" text-anchor="middle" class="copy text-small">enhanced bridge token</text>
+      </g>
+
+      <g aria-label="Transformer layers">
+        <rect x="150" y="177" width="95" height="10" rx="3" class="neutral node"></rect>
+        <rect x="153" y="181" width="95" height="10" rx="3" class="neutral node"></rect>
+        <rect x="156" y="185" width="95" height="10" rx="3" class="neutral node"></rect>
+      </g>
+      <text x="197.5" y="207" text-anchor="middle" class="note text-small">frame tokens hᵢ</text>
+    </g>
+
+    <g aria-label="Global trajectory branch">
+      <path d="M259 104H276" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <rect x="279" y="37" width="151" height="97" rx="10" class="trajectory node"></rect>
+      <text x="291" y="55" class="label">Global branch</text>
+      <text x="291" y="72" class="note text-small">sparse anchors Pᵃ / Oᵃ + phase Φ</text>
+      <path d="M292 110C311 98 324 116 343 93S375 76 398 91S417 67 422 61" class="accent-wire"></path>
+      <circle cx="292" cy="110" r="3" fill="#229B96"></circle>
+      <circle cx="343" cy="93" r="3" fill="#229B96"></circle>
+      <circle cx="398" cy="91" r="3" fill="#229B96"></circle>
+      <circle cx="422" cy="61" r="3" fill="#229B96"></circle>
+      <path d="M300 121H410" class="wire-dashed" marker-end="url(#arrow-trajectory)"></path>
+      <text x="355" y="128" text-anchor="middle" class="note text-small">temporal upsampling → dense P / O</text>
+    </g>
+
+    <g aria-label="Trajectory aligned dynamic scene query">
+      <path d="M430 85H444" class="accent-wire" marker-end="url(#arrow-trajectory)"></path>
+      <path d="M118 88H126V31H510V37" class="wire-dashed" marker-end="url(#arrow-neutral)"></path>
+      <rect x="447" y="37" width="139" height="97" rx="10" class="trajectory node"></rect>
+      <text x="459" y="55" class="label">Dynamic scene query</text>
+      <rect x="459" y="67" width="115" height="47" rx="4" fill="url(#voxel-grid)" class="outline hairline"></rect>
+      <path d="M467 106C482 91 493 101 507 83S535 73 565 78" class="accent-wire"></path>
+      <circle cx="475" cy="99" r="3.4" fill="#FFFFFF" stroke="#229B96"></circle>
+      <circle cx="507" cy="83" r="3.4" fill="#FFFFFF" stroke="#229B96"></circle>
+      <circle cx="546" cy="77" r="3.4" fill="#FFFFFF" stroke="#229B96"></circle>
+      <path d="M475 95V88M507 79V72M546 73V67" class="series-2-ink hairline"></path>
+      <text x="516.5" y="127" text-anchor="middle" class="note text-small">time-aligned scene tokens Dᵢ</text>
+    </g>
+
+    <g aria-label="Local motion refinement">
+      <path d="M354 134V176H444" class="accent-wire" marker-end="url(#arrow-trajectory)"></path>
+      <path d="M516 134V148" class="accent-wire" marker-end="url(#arrow-trajectory)"></path>
+      <path d="M259 193H444" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <rect x="447" y="151" width="139" height="85" rx="10" class="motion node"></rect>
+      <text x="459" y="169" class="label">Local branch</text>
+      <text x="459" y="187" class="note text-small">fuse hᵢ, Pᵢ/Oᵢ, Φᵢ, Dᵢ, Cᵢ</text>
+      <rect x="459" y="199" width="115" height="25" rx="5" class="interaction node"></rect>
+      <circle cx="474" cy="211.5" r="3" fill="#D98232"></circle>
+      <path d="M478 211.5H489M493 205L500 211.5L493 218" class="series-4-ink"></path>
+      <text x="510" y="216" class="copy text-small">H-O query Cᵢ</text>
+      <path d="M118 198H128V230H459" class="wire-dashed" marker-end="url(#arrow-neutral)"></path>
+    </g>
+
+    <g aria-label="Velocity output and auxiliary heads">
+      <path d="M586 193H600" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <rect x="603" y="55" width="121" height="181" rx="10" class="output node"></rect>
+      <text x="615" y="74" class="label">Predictions</text>
+      <rect x="615" y="86" width="97" height="61" rx="7" class="motion node"></rect>
+      <path d="M626 126C638 109 649 135 661 112S684 104 701 94" class="series-1-ink"></path>
+      <path d="M626 133C638 116 649 142 661 119S684 111 701 101" class="series-1-ink hairline" opacity="0.55"></path>
+      <text x="663.5" y="143" text-anchor="middle" class="copy text-small">velocity field vθ</text>
+
+      <rect x="615" y="157" width="29" height="40" rx="5" class="trajectory node"></rect>
+      <rect x="649" y="157" width="29" height="40" rx="5" class="interaction node"></rect>
+      <rect x="683" y="157" width="29" height="40" rx="5" class="output node"></rect>
+      <text x="629.5" y="174" text-anchor="middle" class="copy text-small">phase</text>
+      <text x="663.5" y="174" text-anchor="middle" class="copy text-small">contact</text>
+      <text x="697.5" y="174" text-anchor="middle" class="copy text-small">done?</text>
+      <text x="663.5" y="213" text-anchor="middle" class="note text-small">motion + completion</text>
+    </g>
+
+    <g aria-label="Training objective">
+      <path d="M197 216V247" class="wire-dashed" marker-end="url(#arrow-neutral)"></path>
+      <path d="M663 236V247" class="wire-dashed" marker-end="url(#arrow-neutral)"></path>
+      <rect x="136" y="247" width="588" height="27" rx="8" class="loss node"></rect>
+      <text x="151" y="265" class="label">Training</text>
+      <text x="217" y="265" class="copy">LFM</text>
+      <text x="248" y="265" class="note">masked flow velocity</text>
+      <text x="375" y="265" class="copy">+ λ₁ Ltraj</text>
+      <text x="460" y="265" class="copy">+ λ₂ Lcomp</text>
+      <text x="555" y="265" class="copy">+ λ₃ Lho</text>
+      <text x="643" y="265" class="note">collision</text>
+    </g>
+
+    <path d="M14 288H722" class="outline hairline"></path>
+    <text x="14" y="307" class="label">(b) Enhanced window bridging with human-scene interaction</text>
+
+    <g aria-label="Past-only window bridging mechanism">
+      <rect x="14" y="316" width="430" height="128" rx="10" class="neutral node"></rect>
+
+      <text x="26" y="335" class="label text-small">previous window</text>
+      <g aria-label="Previous motion window">
+        <rect x="26" y="345" width="13" height="27" rx="3" class="motion node"></rect>
+        <rect x="42" y="345" width="13" height="27" rx="3" class="motion node"></rect>
+        <rect x="58" y="345" width="13" height="27" rx="3" class="motion node"></rect>
+        <rect x="74" y="345" width="13" height="27" rx="3" class="history node"></rect>
+        <rect x="90" y="345" width="13" height="27" rx="3" class="history node"></rect>
+        <rect x="106" y="345" width="13" height="27" rx="3" class="history node"></rect>
+        <path d="M80.5 350V361M80.5 354L77 357M80.5 354L84 357M80.5 361L77 367M80.5 361L84 367" class="series-3-ink hairline"></path>
+        <path d="M96.5 350V361M96.5 354L93 357M96.5 354L100 357M96.5 361L93 367M96.5 361L100 367" class="series-3-ink hairline"></path>
+        <path d="M112.5 350V361M112.5 354L109 357M112.5 354L116 357M112.5 361L109 367M112.5 361L116 367" class="series-3-ink hairline"></path>
+      </g>
+      <path d="M103 377H74" class="series-3-ink"></path>
+      <text x="26" y="388" class="note text-small">past K frames Hᵢ</text>
+
+      <rect x="135" y="333" width="79" height="44" rx="7" class="history node"></rect>
+      <text x="174.5" y="352" text-anchor="middle" class="label text-small">MotionState</text>
+      <text x="174.5" y="366" text-anchor="middle" class="copy text-small">Encoder</text>
+      <path d="M119 358H132" class="wire" marker-end="url(#arrow-history)"></path>
+
+      <rect x="135" y="386" width="79" height="35" rx="7" class="trajectory node"></rect>
+      <text x="174.5" y="401" text-anchor="middle" class="copy text-small">local occupancy</text>
+      <text x="174.5" y="415" text-anchor="middle" class="note text-small">crop Oᵢ + goal</text>
+
+      <rect x="229" y="386" width="72" height="35" rx="7" class="trajectory node"></rect>
+      <text x="265" y="400" text-anchor="middle" class="label text-small">Scene points</text>
+      <text x="265" y="414" text-anchor="middle" class="copy text-small">sampler Sᵢ</text>
+      <path d="M214 403H226" class="wire" marker-end="url(#arrow-trajectory)"></path>
+
+      <g aria-label="Body scene cross attention">
+        <rect x="229" y="333" width="72" height="44" rx="7" class="history node"></rect>
+        <circle cx="243" cy="350" r="2" fill="#8066B7"></circle>
+        <circle cx="250" cy="362" r="2" fill="#8066B7"></circle>
+        <circle cx="262" cy="348" r="2" fill="#8066B7"></circle>
+        <circle cx="273" cy="366" r="2" fill="#229B96"></circle>
+        <circle cx="286" cy="352" r="2" fill="#229B96"></circle>
+        <path d="M243 350L273 366M250 362L286 352M262 348L286 352" class="series-3-ink hairline"></path>
+        <text x="265" y="373" text-anchor="middle" class="copy text-small">body points Bᵢ</text>
+      </g>
+
+      <rect x="314" y="350" width="58" height="55" rx="7" class="history node"></rect>
+      <text x="343" y="372" text-anchor="middle" class="label text-small">CrossAttn</text>
+      <text x="343" y="389" text-anchor="middle" class="copy text-small">Q=B, K/V=S</text>
+      <path d="M301 355H311" class="wire" marker-end="url(#arrow-history)"></path>
+      <path d="M301 403H307V394H311" class="wire" marker-end="url(#arrow-history)"></path>
+
+      <rect x="385" y="337" width="47" height="78" rx="8" class="history node"></rect>
+      <text x="408.5" y="355" text-anchor="middle" class="label text-small">enhanced</text>
+      <text x="408.5" y="370" text-anchor="middle" class="label text-small">bridge</text>
+      <path d="M396 385H421" class="series-3-ink"></path>
+      <circle cx="402" cy="385" r="3" fill="#8066B7"></circle>
+      <circle cx="414" cy="385" r="3" fill="#229B96"></circle>
+      <text x="408.5" y="406" text-anchor="middle" class="copy text-small">sᵢ + EHSIᵢ</text>
+      <path d="M214 355V326H378V345H382" class="wire" marker-end="url(#arrow-history)"></path>
+      <path d="M372 378H382" class="wire" marker-end="url(#arrow-history)"></path>
+
+      <text x="26" y="437" class="note text-small">past-only conditioning • training/inference aligned • no future-frame leakage</text>
+    </g>
+
+    <text x="458" y="307" class="label">(c) Completion-aware rollout</text>
+    <g aria-label="Autoregressive ODE rollout">
+      <rect x="458" y="316" width="266" height="128" rx="10" class="neutral node"></rect>
+
+      <rect x="470" y="333" width="54" height="52" rx="7" class="motion node"></rect>
+      <circle cx="482" cy="348" r="2.2" fill="#4478B8"></circle>
+      <circle cx="500" cy="343" r="2.2" fill="#4478B8"></circle>
+      <circle cx="511" cy="360" r="2.2" fill="#4478B8"></circle>
+      <circle cx="488" cy="369" r="2.2" fill="#4478B8"></circle>
+      <text x="497" y="380" text-anchor="middle" class="copy text-small">noise x₁</text>
+
+      <rect x="541" y="333" width="68" height="52" rx="7" class="trajectory node"></rect>
+      <path d="M553 359C561 346 568 370 576 355S590 347 598 341" class="series-2-ink"></path>
+      <text x="575" y="365" text-anchor="middle" class="copy text-small">Euler ODE</text>
+      <text x="575" y="379" text-anchor="middle" class="note text-small">N = 50 steps</text>
+      <path d="M524 359H538" class="wire" marker-end="url(#arrow-neutral)"></path>
+
+      <rect x="626" y="333" width="85" height="52" rx="7" class="output node"></rect>
+      <rect x="636" y="344" width="10" height="25" rx="2" class="history node"></rect>
+      <rect x="649" y="344" width="10" height="25" rx="2" class="history node"></rect>
+      <rect x="662" y="344" width="10" height="25" rx="2" class="output node"></rect>
+      <rect x="675" y="344" width="10" height="25" rx="2" class="output node"></rect>
+      <rect x="688" y="344" width="10" height="25" rx="2" class="output node"></rect>
+      <text x="668.5" y="380" text-anchor="middle" class="copy text-small">motion window</text>
+      <path d="M609 359H623" class="wire" marker-end="url(#arrow-output)"></path>
+
+      <path d="M646 385V397H514" class="wire-dashed" marker-end="url(#arrow-history)"></path>
+      <rect x="470" y="399" width="94" height="30" rx="6" class="history node"></rect>
+      <text x="517" y="418" text-anchor="middle" class="copy text-small">fixed prefix (P=2)</text>
+
+      <polygon points="597,397 625,414 597,431 569,414" class="output node"></polygon>
+      <text x="597" y="418" text-anchor="middle" class="copy text-small">done?</text>
+      <path d="M564 414H566" class="wire" marker-end="url(#arrow-neutral)"></path>
+      <path d="M597 397V389H668V385" class="wire-dashed" marker-end="url(#arrow-neutral)"></path>
+
+      <rect x="639" y="399" width="72" height="30" rx="6" class="output node"></rect>
+      <text x="675" y="412" text-anchor="middle" class="copy text-small">SMPL-X output</text>
+      <text x="675" y="425" text-anchor="middle" class="note text-small">visualize / evaluate</text>
+      <path d="M625 414H636" class="wire" marker-end="url(#arrow-output)"></path>
+
+      <text x="538" y="440" text-anchor="middle" class="note text-small">continue</text>
+      <text x="648" y="440" text-anchor="middle" class="note text-small">stop</text>
+    </g>
+  </svg>

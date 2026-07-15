@@ -7,6 +7,11 @@ from pathlib import Path
 import numpy as np
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OMOMO_TRAIN_FILE = "train_diffusion_manip_window_120_cano_joints24.p"
+OMOMO_TEST_FILE = "test_diffusion_manip_window_120_processed_joints24.p"
+
+
 def load_pickle(path):
     with open(path, "rb") as f:
         return pkl.load(f)
@@ -183,6 +188,8 @@ def create_window_splits(dataset_dir, output_dir, ratios, seed, motion_dict_rel_
     )
 
     summary = {
+        "dataset_type": "lingo",
+        "split_required": True,
         "format": "window",
         "seed": seed,
         "ratios": {
@@ -214,15 +221,153 @@ def create_window_splits(dataset_dir, output_dir, ratios, seed, motion_dict_rel_
     return summary
 
 
+def create_trumans_splits(dataset_dir, output_dir, ratios, seed):
+    idx_start = np.load(dataset_dir / "idx_start.npy", mmap_mode="r")
+    scene_flag = np.load(dataset_dir / "scene_flag.npy", mmap_mode="r")
+    if len(idx_start) == 0:
+        raise RuntimeError(f"TRUMANS contains no window starts: {dataset_dir / 'idx_start.npy'}")
+    if int(np.max(idx_start)) >= len(scene_flag):
+        raise ValueError("TRUMANS idx_start.npy contains an index outside scene_flag.npy.")
+
+    window_groups = np.asarray(scene_flag[np.asarray(idx_start, dtype=np.int64)])
+    unique_groups = np.unique(window_groups)
+    group_splits = split_scene_names([str(value) for value in unique_groups], ratios, seed)
+    summary = {
+        "dataset_type": "trumans",
+        "split_required": True,
+        "format": "raw_windows",
+        "group_key": "scene_flag",
+        "seed": int(seed),
+        "ratios": {
+            "train": float(ratios[0]),
+            "val": float(ratios[1]),
+            "test": float(ratios[2]),
+        },
+        "splits": {},
+    }
+
+    for split_name, groups in group_splits.items():
+        numeric_groups = np.asarray([int(value) for value in groups], dtype=window_groups.dtype)
+        indices = np.flatnonzero(np.isin(window_groups, numeric_groups)).astype(np.int64)
+        save_split(output_dir, split_name, indices, groups)
+        group_counts = Counter(str(window_groups[index]) for index in indices)
+        summary["splits"][split_name] = {
+            "num_indices": int(len(indices)),
+            "num_groups": int(len(groups)),
+            "top_groups": group_counts.most_common(10),
+        }
+        print(f"{split_name:5s}: {len(indices):8d} windows, {len(groups):3d} scene groups")
+    return summary
+
+
+def _has_all_files(folder, names):
+    return all((folder / name).exists() for name in names)
+
+
+def detect_dataset_type(dataset_dir):
+    """Return ``(dataset_type, resolved_data_dir)`` from official file markers."""
+    dataset_dir = Path(dataset_dir)
+    candidates = [dataset_dir]
+    for child_name in ("data", "trumans"):
+        child = dataset_dir / child_name
+        if child.is_dir():
+            candidates.append(child)
+
+    for candidate in candidates:
+        if _has_all_files(candidate, (OMOMO_TRAIN_FILE, OMOMO_TEST_FILE)):
+            return "omomo", candidate
+    for candidate in candidates:
+        if _has_all_files(candidate, ("idx_start.npy", "scene_flag.npy", "human_joints.npy")):
+            return "trumans", candidate
+    for candidate in candidates:
+        if (candidate / "scene_name.pkl").exists() and (candidate / "language_motion_dict").is_dir():
+            return "lingo", candidate
+    raise ValueError(
+        f"Could not detect a LINGO, OMOMO, or TRUMANS dataset under {dataset_dir}. "
+        "Use --dataset-type to select the expected format and verify the dataset files."
+    )
+
+
+def resolve_dataset(dataset_dir, dataset_type):
+    if dataset_type == "auto":
+        return detect_dataset_type(dataset_dir)
+    detected_type, resolved_dir = detect_dataset_type(dataset_dir)
+    if detected_type != dataset_type:
+        raise ValueError(
+            f"--dataset-type={dataset_type} was requested, but {resolved_dir} looks like {detected_type}."
+        )
+    return dataset_type, resolved_dir
+
+
+def split_policy(dataset_type, dataset_dir):
+    if dataset_type == "omomo":
+        missing = [
+            name for name in (OMOMO_TRAIN_FILE, OMOMO_TEST_FILE)
+            if not (dataset_dir / name).exists()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                f"OMOMO must use its official train/test files; missing from {dataset_dir}: {missing}"
+            )
+        return {
+            "dataset_type": "omomo",
+            "split_required": False,
+            "reason": "official subject-disjoint train/test files already exist",
+        }
+    if dataset_type == "lingo":
+        return {
+            "dataset_type": "lingo",
+            "split_required": True,
+            "reason": "the released motion dictionary has no train/val/test assignment",
+        }
+    if dataset_type == "trumans":
+        return {
+            "dataset_type": "trumans",
+            "split_required": True,
+            "reason": "idx_start.npy contains all windows without train/val/test assignment",
+        }
+    raise ValueError(f"Unsupported dataset type: {dataset_type}")
+
+
+def mirror_lingo_splits(output_dir, window_dir):
+    window_split_dir = window_dir / "splits"
+    window_split_dir.mkdir(parents=True, exist_ok=True)
+    source_index_path = window_dir / "source_index.npy"
+    source_index = np.load(source_index_path) if source_index_path.exists() else None
+    window_count = None
+    length_path = window_dir / "length.npy"
+    if length_path.exists():
+        window_count = len(np.load(length_path, mmap_mode="r"))
+
+    for split_name in ("train", "val", "test"):
+        source_indices = np.load(output_dir / f"{split_name}_idx.npy").astype(np.int64)
+        if source_index is not None:
+            split_indices = np.flatnonzero(np.isin(source_index, source_indices)).astype(np.int64)
+        elif window_count is not None:
+            split_indices = source_indices[source_indices < window_count]
+        else:
+            split_indices = source_indices
+        np.save(window_split_dir / f"{split_name}_idx.npy", split_indices)
+    print(f"Mirrored LINGO split indices to {window_split_dir}")
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Create scene-disjoint window train/val/test splits for LINGO/HSI.")
-    parser.add_argument("--dataset-dir", default="/share/qkh/dataset/lingo")
+    parser = argparse.ArgumentParser(
+        description="Create leak-free splits only for datasets that do not already provide official splits."
+    )
+    parser.add_argument("--dataset-dir", default=str(PROJECT_ROOT / "dataset" / "lingo"))
+    parser.add_argument(
+        "--dataset-type",
+        choices=("auto", "lingo", "omomo", "trumans"),
+        default="auto",
+        help="Dataset format. auto detects it from official file markers.",
+    )
     parser.add_argument("--motion-dict", default="language_motion_dict/language_motion_dict__inter_and_loco__16.pkl")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(
         "--window-dir",
-        default="/share/qkh/dataset/lingo/window_t16_s3",
-        help="Optional preprocessed window dataset folder; scene splits are mirrored to window-dir/splits.",
+        default=None,
+        help="Optional preprocessed LINGO window folder; generated splits are mirrored to window-dir/splits.",
     )
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
@@ -235,32 +380,35 @@ def parse_args():
 
 def main():
     args = parse_args()
-    dataset_dir = Path(args.dataset_dir)
-    output_dir = Path(args.output_dir) if args.output_dir else dataset_dir / "splits"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    dataset_type, dataset_dir = resolve_dataset(Path(args.dataset_dir), args.dataset_type)
+    policy = split_policy(dataset_type, dataset_dir)
+    print(json.dumps({**policy, "dataset_dir": str(dataset_dir)}, indent=2))
+    if not policy["split_required"]:
+        print("Skipping split generation; the dataset's official split files remain authoritative.")
+        return
 
     ratios = np.asarray([args.train_ratio, args.val_ratio, args.test_ratio], dtype=np.float64)
+    if not np.isfinite(ratios).all() or np.any(ratios < 0) or ratios.sum() <= 0:
+        raise ValueError("Split ratios must be finite, non-negative, and have a positive sum.")
     ratios = ratios / ratios.sum()
 
-    summary = create_window_splits(
-        dataset_dir,
-        output_dir,
-        ratios,
-        args.seed,
-        args.motion_dict,
-        args.min_test_texts,
-        args.min_val_texts,
-    )
-
-    window_dir = Path(args.window_dir) if args.window_dir else None
-    if window_dir is not None and window_dir.exists():
-        window_split_dir = window_dir / "splits"
-        window_split_dir.mkdir(parents=True, exist_ok=True)
-        for split_name in ("train", "val", "test"):
-            src = output_dir / f"{split_name}_idx.npy"
-            if src.exists():
-                np.save(window_split_dir / f"{split_name}_idx.npy", np.load(src))
-        print(f"Mirrored window split indices to {window_split_dir}")
+    output_dir = Path(args.output_dir) if args.output_dir else dataset_dir / "splits"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if dataset_type == "lingo":
+        summary = create_window_splits(
+            dataset_dir,
+            output_dir,
+            ratios,
+            args.seed,
+            args.motion_dict,
+            args.min_test_texts,
+            args.min_val_texts,
+        )
+        window_dir = Path(args.window_dir) if args.window_dir else dataset_dir / "window_t16_s3"
+        if window_dir.exists():
+            mirror_lingo_splits(output_dir, window_dir)
+    else:
+        summary = create_trumans_splits(dataset_dir, output_dir, ratios, args.seed)
 
     with open(output_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)

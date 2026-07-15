@@ -197,22 +197,11 @@ class TrumansDataset(Dataset):
         if split_path.exists():
             split_idx = np.load(split_path).astype(np.int64)
             return split_idx[split_idx < len(self.indices)]
-
-        rng = np.random.default_rng(self.split_seed)
-        order = np.arange(len(self.indices), dtype=np.int64)
-        rng.shuffle(order)
-        ratios = np.asarray(self.split_ratios, dtype=np.float64)
-        ratios = ratios / ratios.sum()
-        n_train = int(round(len(order) * ratios[0]))
-        n_val = int(round(len(order) * ratios[1]))
-        splits = {
-            "train": np.sort(order[:n_train]),
-            "val": np.sort(order[n_train:n_train + n_val]),
-            "test": np.sort(order[n_train + n_val:]),
-        }
-        if split_name not in splits:
-            raise ValueError(f"Unknown split={split_name!r}; use train, val, test, or provide {split_path}.")
-        return splits[split_name]
+        raise FileNotFoundError(
+            f"TRUMANS split file does not exist: {split_path}. "
+            "Run create_dataset_splits.py with --dataset-dir pointing to the TRUMANS folder. "
+            "Per-window random fallback is intentionally disabled because overlapping windows leak across splits."
+        )
 
     def _frame_ids(self, src_idx):
         start = int(self.idx_start[src_idx])

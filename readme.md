@@ -59,7 +59,7 @@ To run the code, you need to have the following installed:
 # Training and Evaluation
 ## Overview
 
-This README provides instructions on setting up and training the FlowHSI model with either the LINGO/HSI window dataset or the TRUMANS raw dataset.
+This README provides instructions on setting up and training the FlowHSI model with the LINGO/HSI, TRUMANS, or OMOMO datasets.
 
 ## Prerequisites
 
@@ -87,6 +87,15 @@ python preprocess_window_dataset.py \
   --output-dir /share/qkh/dataset/lingo/window_t16_s3 \
   --window-size 16 \
   --step 3
+```
+
+Create scene-disjoint train/validation/test splits and mirror them to the
+preprocessed window folder:
+
+```bash
+python create_dataset_splits.py \
+  --dataset-dir /share/qkh/dataset/lingo \
+  --window-dir /share/qkh/dataset/lingo/window_t16_s3
 ```
 
 Train with the LINGO dataloader:
@@ -121,6 +130,14 @@ Object/
 Scene/
 ```
 
+Create scene-group-disjoint splits once. This avoids leakage between heavily
+overlapping raw windows:
+
+```bash
+python create_dataset_splits.py \
+  --dataset-dir ../dataset/trumans/trumans
+```
+
 Train with the TRUMANS dataloader:
 
 ```bash
@@ -142,6 +159,31 @@ Train a TRUMANS motion evaluator for evaluator-space FID/Diversity:
 python train_motion_evaluator.py --config-name config_motion_evaluator_trumans \
   dataset.folder=/path/to/trumans/trumans
 ```
+
+### OMOMO
+
+Place the official OMOMO files under `../dataset/OMOMO/data`. In particular,
+the adapter consumes the official 120-frame train/test window files,
+normalization statistics, and captured object meshes:
+
+```text
+train_diffusion_manip_window_120_cano_joints24.p
+test_diffusion_manip_window_120_processed_joints24.p
+min_max_mean_std_data_window_120_cano_joints24.p
+captured_objects/
+```
+
+Train on the official subject-based training set:
+
+```bash
+python train.py --config-name config_train_omomo
+```
+
+OMOMO already separates subjects 1-15 for training and subjects 16-17 for
+testing, so `create_dataset_splits.py` detects OMOMO and skips split generation.
+The default training config keeps the official test subjects unloaded and does
+not use them for validation. To explicitly monitor the official test set, add
+`use_validation=true dataset.load_test=true val_split=test`.
 
 The training script instantiates the dataloader from the selected dataset config, builds the conditional Flow Matching sampler from `./code/config/sampler/pelvis.yaml`, and trains the model using the configurations in `./code/config`.
 

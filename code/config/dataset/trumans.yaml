@@ -25,13 +25,11 @@ split_dir: splits
 scene_mode: ${scene_mode}
 
 # TRUMANS official raw arrays use idx_start.npy as window starts.
+# Run create_dataset_splits.py once; it groups windows by scene_flag so that
+# overlapping windows from one scene never cross train/val/test boundaries.
 norm_file: norm.npy
 norm_key: null
 normalize: true
-split_seed: 42
-train_ratio: 0.8
-val_ratio: 0.1
-test_ratio: 0.1
 max_samples: 0
 
 # Object conditions: object_motion is translation + 6D rotation, object_points

@@ -121,26 +121,7 @@ def parse_args():
     parser.add_argument("--motion-file", default="human_joints_aligned.npy")
     parser.add_argument("--orient-file", default="human_orient.npy")
     parser.add_argument("--norm-file", default="norm_inter_and_loco__16frames.npy")
-    parser.add_argument("--train-ratio", type=float, default=0.8)
-    parser.add_argument("--val-ratio", type=float, default=0.1)
-    parser.add_argument("--test-ratio", type=float, default=0.1)
-    parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
-
-
-def split_indices(n, ratios, seed):
-    rng = np.random.default_rng(seed)
-    order = np.arange(n, dtype=np.int64)
-    rng.shuffle(order)
-    ratios = np.asarray(ratios, dtype=np.float64)
-    ratios = ratios / ratios.sum()
-    n_train = int(round(n * ratios[0]))
-    n_val = int(round(n * ratios[1]))
-    return {
-        "train": np.sort(order[:n_train]),
-        "val": np.sort(order[n_train:n_train + n_val]),
-        "test": np.sort(order[n_train + n_val:]),
-    }
 
 
 def main():
@@ -321,15 +302,6 @@ def main():
     save_pickle(texts, output_dir / "text.pkl")
     save_pickle(scene_names, output_dir / "scene_name.pkl")
 
-    split_dir = output_dir / "splits"
-    split_dir.mkdir(exist_ok=True)
-    for split_name, split_idx in split_indices(
-        n,
-        (args.train_ratio, args.val_ratio, args.test_ratio),
-        args.seed,
-    ).items():
-        np.save(split_dir / f"{split_name}_idx.npy", split_idx)
-
     metadata = {
         "dataset_dir": str(dataset_dir),
         "motion_dict": str(dataset_dir / args.motion_dict),
@@ -347,7 +319,12 @@ def main():
         "need_pi_count": int(need_pi.sum()),
         "terminal_window_count": int(is_terminal_window.sum()),
         "missing_text_feature_count": len(missing_text_features),
-        "split_mode": "random_window",
+        "split_mode": "external_scene_disjoint",
+        "split_required": True,
+        "split_command": (
+            f"python create_dataset_splits.py --dataset-dir {dataset_dir} "
+            f"--window-dir {output_dir}"
+        ),
     }
     with open(output_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
@@ -361,6 +338,7 @@ def main():
 
     print(json.dumps(metadata, indent=2))
     print(f"Saved autoregressive window dataset to {output_dir}")
+    print("Run create_dataset_splits.py to create scene-disjoint LINGO splits.")
 
 
 if __name__ == "__main__":
