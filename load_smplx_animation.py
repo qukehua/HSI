@@ -30,10 +30,36 @@ def call_smplx_operator(name):
     return True
 
 
+def ensure_object_visible(obj):
+    obj.hide_viewport = False
+    obj.hide_render = False
+    try:
+        obj.hide_set(False)
+    except Exception:
+        pass
+
+    parent = obj.parent
+    while parent is not None:
+        parent.hide_viewport = False
+        parent.hide_render = False
+        try:
+            parent.hide_set(False)
+        except Exception:
+            pass
+        parent = parent.parent
+
+    for collection in obj.users_collection:
+        collection.hide_viewport = False
+        collection.hide_render = False
+
+
 def load_smplx_animation(file, obj):
+    ensure_object_visible(obj)
     animation_data_clear(obj)
 
     armature = obj.parent
+    if armature is not None:
+        ensure_object_visible(armature)
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj  # mesh needs to be active object for recalculating joint locations
