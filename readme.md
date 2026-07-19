@@ -1,5 +1,4 @@
-# InterFlow: Trajectory-Aware Flow Matching for Human Interaction Motion
-Generation In Dynamic Scenes
+# InterFlow: Trajectory-Aware Flow Matching for Human Interaction Motion Generation In Dynamic Scenes
 
 ## Prerequisites
 
