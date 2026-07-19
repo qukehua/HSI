@@ -4,15 +4,7 @@
 
 To run the code, you need to have the following installed:
 
-1. Requirements
-- Python 3.10
-- Required Python packages (specified in `requirements.txt`)
-
-
-
-2. **Download SMPL-X Models**:
-
-3. **Install Python Packages**:
+1. **Install Python Packages**:
     ```sh
     conda create -n hsi python=3.10 -y
     conda activate hsi
@@ -21,7 +13,12 @@ To run the code, you need to have the following installed:
     pip install -r requirements.txt
     ```
 
-4. **Install Blender**:
+
+2. **Download SMPL-X Models**:
+
+
+
+3. **Install Blender**:
     - We use [Blender](https://www.blender.org/) for visualization of the result.
     - Please download Blender3.6 from its [official website](https://download.blender.org/release/Blender3.6/).
     - (Optional) Then, download [SMPL-X Blender Add-on](https://smpl-x.is.tue.mpg.de/download.php) and activate it in Blender.
