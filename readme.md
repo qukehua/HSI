@@ -4,7 +4,7 @@
 
 To run the code, you need to have the following installed:
 
-1.
+1. Requirements
 - Python 3.10
 - Required Python packages (specified in `requirements.txt`)
 
