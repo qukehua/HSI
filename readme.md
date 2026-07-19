@@ -4,17 +4,13 @@
 
 To run the code, you need to have the following installed:
 
+1.
 - Python 3.10
 - Required Python packages (specified in `requirements.txt`)
 
-## Installation
 
-1. **Clone the Repository**:
-    ```sh
-    git clone git@github.com:mileret/lingo-release.git
-    ```
 
-2. **Download Checkpoints, Data, and SMPL-X Models**:
+2. **Download SMPL-X Models**:
     - Download the necessary files and folders from [this link](https://drive.google.com/file/d/1L2V8RlPMAhWF93o_RpIznO_bacjSSLqu/view?usp=drive_link).
     - Extract `lingo_utils.zip`, and place the four files and folders (`dataset`, `ckpts`, `smpl_models`, `vis.blend`) at the root of the project directory.
 
