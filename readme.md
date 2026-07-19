@@ -1,5 +1,5 @@
-# FlowHSI: Trajectory-Aligned Flow Matching for Human–Scene Interaction Generation
-
+# InterFlow: Trajectory-Aware Flow Matching for Human Interaction Motion
+Generation In Dynamic Scenes
 
 ## Prerequisites
 
