@@ -1,6 +1,10 @@
 import bpy
 import numpy as np
+from pathlib import Path
 from mathutils import Vector, Quaternion
+
+
+MODULE_DIR = Path(__file__).resolve().parent
 
 SMPLX_JOINT_NAMES = [
     'pelvis','left_hip','right_hip','spine1','left_knee','right_knee','spine2','left_ankle','right_ankle','spine3', 'left_foot','right_foot','neck','left_collar','right_collar','head','left_shoulder','right_shoulder','left_elbow', 'right_elbow','left_wrist','right_wrist',
@@ -64,7 +68,7 @@ def load_smplx_animation(file, obj):
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj  # mesh needs to be active object for recalculating joint locations
 
-    with np.load("./smplx_handposes.npz", allow_pickle=True) as data:
+    with np.load(MODULE_DIR / "smplx_handposes.npz", allow_pickle=True) as data:
         hand_poses = data["hand_poses"].item()
         (left_hand_pose, right_hand_pose) = hand_poses["relaxed"]
         hand_pose_relaxed = np.concatenate((left_hand_pose, right_hand_pose)).reshape(NUM_SMPLX_HANDJOINTS * 2, 3)
