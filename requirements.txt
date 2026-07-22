@@ -1,4 +1,5 @@
 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+--extra-index-url https://download.pytorch.org/whl/cu128
 absl-py==2.1.0
 antlr4-python3-runtime==4.9.3
 cachetools==5.5.0
@@ -16,14 +17,14 @@ importlib_metadata==8.5.0
 importlib_resources==6.4.5
 joblib==1.4.2
 Markdown==3.7
-MarkupSafe==2.1.5
-numpy==1.24.4
+MarkupSafe==3.0.3
+numpy==1.26.4
 oauthlib==3.2.2
 omegaconf==2.3.0
 opencv-python==4.10.0.84
 packaging==24.2
 pathfinding==1.0.16
-pillow==10.4.0
+pillow==12.2.0
 protobuf==5.29.2
 pyasn1==0.6.1
 pyasn1_modules==0.4.1
@@ -37,11 +38,11 @@ six==1.17.0
 smplx==0.1.28
 tensorboard==2.14.0
 tensorboard-data-server==0.7.2
-torch @ https://mirrors.aliyun.com/pytorch-wheels/cu117/torch-1.13.1%2Bcu117-cp310-cp310-linux_x86_64.whl
-torchaudio @ https://mirrors.aliyun.com/pytorch-wheels/cu117/torchaudio-0.13.1%2Bcu117-cp310-cp310-linux_x86_64.whl
-torchvision @ https://mirrors.aliyun.com/pytorch-wheels/cu117/torchvision-0.14.1%2Bcu117-cp310-cp310-linux_x86_64.whl
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128
+torchvision==0.26.0+cu128
 tqdm==4.67.1
-typing_extensions==4.12.2
+typing_extensions==4.15.0
 urllib3==2.2.3
 vit-pytorch==1.6.5
 wandb==0.18.7
