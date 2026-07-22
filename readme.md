@@ -15,6 +15,7 @@ To run the code, you need to have the following installed:
 
 
 2. **Download SMPL-X Models**:
+    [SMPL-X]( https://drive.google.com/file/d/1BLUWs_jpNZs_D2FiCEaBoyy4V2wIVl_u/view?usp=drive_link)
 
 
 
