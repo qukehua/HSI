@@ -1,7 +1,7 @@
 name: lingo
 _target_: datasets.lingo.LingoDataset
-folder: /share/qkh/dataset/lingo/window_t16_s3
-scene_source_dir: /share/qkh/dataset/lingo
+folder: ../../datasets/lingo/window_t16_s3
+scene_source_dir: ../../datasets/lingo
 device: ${device}
 batch_size: ${batch_size}
 step: 3

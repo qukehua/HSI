@@ -1,6 +1,6 @@
 name: omomo
 _target_: datasets.omomo.OmomoDataset
-folder: ${oc.env:ROOT_DIR}/dataset/OMOMO/data
+folder: ../../datasets/data
 device: ${device}
 batch_size: ${batch_size}
 step: 1

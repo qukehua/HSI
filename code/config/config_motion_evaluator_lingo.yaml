@@ -42,8 +42,8 @@ train_split: train
 val_split: val
 
 dataset:
-  folder: /share/qkh/dataset/lingo/window_t16_s3
-  scene_source_dir: /share/qkh/dataset/lingo
+  folder: ../../datasets/lingo/window_t16_s3
+  scene_source_dir: ../../datasets/lingo
   split: null
 
 hydra:

@@ -1,6 +1,6 @@
 name: trumans
 _target_: datasets.trumans.TrumansDataset
-folder: ${oc.env:ROOT_DIR}/dataset/trumans/trumans
+folder: ../../datasets/trumans/trumans
 device: ${device}
 batch_size: ${batch_size}
 step: 3

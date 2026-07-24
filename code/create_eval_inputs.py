@@ -188,7 +188,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Create inputs_test pkl files by sampling unique text commands from a dataset split."
     )
-    parser.add_argument("--dataset-dir", default="/share/qkh/dataset/lingo")
+    parser.add_argument("--dataset-dir", default="../../datasets/lingo")
     parser.add_argument(
         "--motion-dict",
         default="language_motion_dict/language_motion_dict__inter_and_loco__16.pkl",

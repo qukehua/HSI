@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OMOMO_TRAIN_FILE = "train_diffusion_manip_window_120_cano_joints24.p"
 OMOMO_TEST_FILE = "test_diffusion_manip_window_120_processed_joints24.p"
 
@@ -355,7 +354,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Create leak-free splits only for datasets that do not already provide official splits."
     )
-    parser.add_argument("--dataset-dir", default=str(PROJECT_ROOT / "dataset" / "lingo"))
+    parser.add_argument("--dataset-dir", default="../../datasets/lingo")
     parser.add_argument(
         "--dataset-type",
         choices=("auto", "lingo", "omomo", "trumans"),
@@ -366,7 +365,7 @@ def parse_args():
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(
         "--window-dir",
-        default=None,
+        default="../../datasets/lingo/window_t16_s3",
         help="Optional preprocessed LINGO window folder; generated splits are mirrored to window-dir/splits.",
     )
     parser.add_argument("--train-ratio", type=float, default=0.8)

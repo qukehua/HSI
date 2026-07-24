@@ -73,8 +73,8 @@ Create the autoregressive window dataset:
 
 ```bash
 python preprocess_window_dataset.py \
-  --dataset-dir /share/qkh/dataset/lingo \
-  --output-dir /share/qkh/dataset/lingo/window_t16_s3 \
+  --dataset-dir ../../datasets/lingo \
+  --output-dir ../../datasets/lingo/window_t16_s3 \
   --window-size 16 \
   --step 3
 ```
@@ -84,16 +84,16 @@ preprocessed window folder:
 
 ```bash
 python create_dataset_splits.py \
-  --dataset-dir /share/qkh/dataset/lingo \
-  --window-dir /share/qkh/dataset/lingo/window_t16_s3
+  --dataset-dir ../../datasets/lingo \
+  --window-dir ../../datasets/lingo/window_t16_s3
 ```
 
 Train with the LINGO dataloader:
 
 ```bash
 python train.py --config-name config_train_lingo \
-  dataset.folder=/share/qkh/dataset/lingo/window_t16_s3 \
-  dataset.scene_source_dir=/share/qkh/dataset/lingo
+  dataset.folder=../../datasets/lingo/window_t16_s3 \
+  dataset.scene_source_dir=../../datasets/lingo
 ```
 
 The LINGO setting uses `code/config/dataset/lingo.yaml`, with 28 joints and 768-D CLIP text features.
@@ -106,7 +106,7 @@ python train_motion_evaluator.py --config-name config_motion_evaluator_lingo
 
 ### TRUMANS
 
-Place the TRUMANS official files under `../dataset/trumans/trumans`, including:
+Place the TRUMANS official files under `../../datasets/trumans/trumans`, including:
 
 ```text
 human_joints.npy
@@ -125,7 +125,7 @@ overlapping raw windows:
 
 ```bash
 python create_dataset_splits.py \
-  --dataset-dir ../dataset/trumans/trumans
+  --dataset-dir ../../datasets/trumans/trumans
 ```
 
 Train with the TRUMANS dataloader:
@@ -138,7 +138,7 @@ If your TRUMANS folder is elsewhere, override the dataset path:
 
 ```bash
 python train.py --config-name config_train_trumans \
-  dataset.folder=/path/to/trumans/trumans
+  dataset.folder=../../datasets/trumans/trumans
 ```
 
 The TRUMANS setting uses `code/config/dataset/trumans.yaml`, with 24 joints, 10-D action labels, and object conditions from `object_flag.npy`, `object_mat.npy`, and `Object/*.npy`.
@@ -147,12 +147,12 @@ Train a TRUMANS motion evaluator for evaluator-space FID/Diversity:
 
 ```bash
 python train_motion_evaluator.py --config-name config_motion_evaluator_trumans \
-  dataset.folder=/path/to/trumans/trumans
+  dataset.folder=../../datasets/trumans/trumans
 ```
 
 ### OMOMO
 
-Place the official OMOMO files under `../dataset/OMOMO/data`. In particular,
+Place the official OMOMO files under `../../datasets/data`. In particular,
 the adapter consumes the official 120-frame train/test window files,
 normalization statistics, and captured object meshes:
 
@@ -182,33 +182,33 @@ The training script instantiates the dataloader from the selected dataset config
 
 #FID, Diversity, Multi-modality, Precision
 ```sh
-python evaluation.py ^
-  --generated ..\results\outputs\model.pkl ^
-  --reference gt ^
-  --metrics interactive ^
-  --smpl-dir ..\smpl_models
+python evaluation.py \
+  --generated ../results/outputs/model.pkl \
+  --reference gt \
+  --metrics interactive \
+  --smpl-dir ../smpl_models
 ```
 
 Use a trained motion evaluator checkpoint to compute FID/Diversity/Precision in evaluator embedding space instead of the fallback hand-crafted joint features:
 
 ```sh
-python evaluation.py ^
-  --generated ..\results\outputs\*.pkl ^
-  --reference-dataset ..\dataset\lingo ^
-  --reference-joints-ind 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,34,40,49 ^
-  --motion-evaluator-checkpoint ..\results\motion_evaluator_lingo\checkpoints\best_model.pth ^
-  --metrics interactive ^
-  --smpl-dir ..\smpl_models
+python evaluation.py \
+  --generated ../results/outputs/*.pkl \
+  --reference-dataset ../../datasets/lingo \
+  --reference-joints-ind 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,34,40,49 \
+  --motion-evaluator-checkpoint ../results/motion_evaluator_lingo/checkpoints/best_model.pth \
+  --metrics interactive \
+  --smpl-dir ../smpl_models
 ```
 
 For TRUMANS, use the TRUMANS evaluator checkpoint and the TRUMANS reference files/split. The evaluator checkpoint must be trained with the same joint set as the motions being evaluated.
 
 #Human-Object Contact Precision, Recall, F1
 ```sh
-python evaluation.py ^
-  --generated ..\results\outputs\*.pkl ^
-  --reference ..\dataset\OMOMO\data\test_diffusion_manip_seq_joints24.p ^
-  --metrics reaching ^
+python evaluation.py \
+  --generated ../results/outputs/*.pkl \
+  --reference ../../datasets/data/test_diffusion_manip_seq_joints24.p \
+  --metrics reaching \
   --contact-threshold 0.05
 ```
 
@@ -216,11 +216,11 @@ The `reaching` metric group reports OMOMO-style `contact_precision`, `contact_re
 
 #Pene%, Pene mean, Pene max, Foot Sliding
 ```sh
-python evaluation.py ^
-  --generated ..\results\outputs\model.pkl ^
-  --metrics locomotion ^
-  --smpl-dir ..\smpl_models ^
-  --scene-occ ..\dataset\Scene_vis ^
-  --compute-vertices ^
+python evaluation.py \
+  --generated ../results/outputs/model.pkl \
+  --metrics locomotion \
+  --smpl-dir ../smpl_models \
+  --scene-occ ../../datasets/lingo/Scene_vis \
+  --compute-vertices \
   --body-points vertices
 ```
