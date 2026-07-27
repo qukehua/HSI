@@ -34,6 +34,10 @@ max_test_samples: 0
 mmap_mode: null
 
 object_num_points: 1024
+# Shared vector-BPS geometry used by the global token and dynamic surface proxies.
+bps_num_points: 256
+bps_radius: 1.0
+bps_seed: 12345
 normalize: true
 convert_z_up_to_y_up: true
 

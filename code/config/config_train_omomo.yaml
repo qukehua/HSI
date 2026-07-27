@@ -66,6 +66,7 @@ human_scene_num_body_frames: 4
 human_scene_num_heads: 4
 human_scene_occupancy_threshold: 0.5
 use_human_object_cross_query: true
+use_bps_object_geometry: true
 human_object_query_num_points: 64
 human_object_query_joint_ids: null
 human_object_collision_margin: 0.05

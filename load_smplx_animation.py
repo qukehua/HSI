@@ -57,13 +57,40 @@ def ensure_object_visible(obj):
         collection.hide_render = False
 
 
-def load_smplx_animation(file, obj):
+def _pose_frames(file, keys, num_frames, num_joints):
+    value = next((file[key] for key in keys if key in file), None)
+    if value is None:
+        return np.zeros((num_frames, num_joints, 3), dtype=np.float64)
+
+    frames = np.asarray(value, dtype=np.float64).reshape(-1, num_joints, 3)
+    if len(frames) == 1 and num_frames > 1:
+        frames = np.repeat(frames, num_frames, axis=0)
+    if len(frames) != num_frames:
+        raise ValueError(
+            f"{keys[0]} contains {len(frames)} frames, expected {num_frames}"
+        )
+    return frames
+
+
+def _set_linear_keyframes(fcurve):
+    for point in fcurve.keyframe_points:
+        point.interpolation = "LINEAR"
+
+
+def load_smplx_animation(
+    file,
+    obj,
+    action_name=None,
+    start_frame=0,
+    fps=30,
+):
     ensure_object_visible(obj)
     animation_data_clear(obj)
 
     armature = obj.parent
-    if armature is not None:
-        ensure_object_visible(armature)
+    if armature is None or armature.type != "ARMATURE":
+        raise ValueError(f"{obj.name} must be parented to an SMPL-X armature")
+    ensure_object_visible(armature)
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj  # mesh needs to be active object for recalculating joint locations
@@ -73,22 +100,45 @@ def load_smplx_animation(file, obj):
         (left_hand_pose, right_hand_pose) = hand_poses["relaxed"]
         hand_pose_relaxed = np.concatenate((left_hand_pose, right_hand_pose)).reshape(NUM_SMPLX_HANDJOINTS * 2, 3)
 
-    translation = file["transl"].reshape(-1, 3)
-    global_orient = file["global_orient"].reshape(-1, 3)
-    body_pose = np.array(file["body_pose"]).reshape(-1, NUM_SMPLX_BODYJOINTS, 3)
-    left_hand_pose = np.zeros((len(body_pose), NUM_SMPLX_HANDJOINTS, 3))
-    right_hand_pose = np.zeros((len(body_pose), NUM_SMPLX_HANDJOINTS, 3))
-    betas = [0.0] * 10
+    translation = np.asarray(file["transl"], dtype=np.float64).reshape(-1, 3)
+    global_orient = np.asarray(file["global_orient"], dtype=np.float64).reshape(-1, 3)
+    body_pose = np.asarray(file["body_pose"], dtype=np.float64).reshape(
+        -1, NUM_SMPLX_BODYJOINTS, 3
+    )
     num_keyframes = len(body_pose)
+    if len(translation) != num_keyframes or len(global_orient) != num_keyframes:
+        raise ValueError(
+            "transl, global_orient, and body_pose must contain the same frame count"
+        )
+
+    left_hand_pose = _pose_frames(
+        file,
+        ("left_hand", "left_hand_pose"),
+        num_keyframes,
+        NUM_SMPLX_HANDJOINTS,
+    )
+    right_hand_pose = _pose_frames(
+        file,
+        ("right_hand", "right_hand_pose"),
+        num_keyframes,
+        NUM_SMPLX_HANDJOINTS,
+    )
+    betas_value = file.get("betas", np.zeros(10, dtype=np.float64))
+    betas = np.asarray(betas_value, dtype=np.float64).reshape(-1)[:10]
+    if len(betas) < 10:
+        betas = np.pad(betas, (0, 10 - len(betas)))
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    for index, beta in enumerate(betas):
-        key_block_name = f"Shape{index:03}"
+    if obj.data.shape_keys is None:
+        print(f"WARNING: {obj.name} has no shape keys; SMPL-X betas were not applied")
+    else:
+        for index, beta in enumerate(betas):
+            key_block_name = f"Shape{index:03}"
 
-        if key_block_name in obj.data.shape_keys.key_blocks:
-            obj.data.shape_keys.key_blocks[key_block_name].value = beta
-        else:
-            print(f"ERROR: No key block for: {key_block_name}")
+            if key_block_name in obj.data.shape_keys.key_blocks:
+                obj.data.shape_keys.key_blocks[key_block_name].value = float(beta)
+            else:
+                print(f"ERROR: No key block for: {key_block_name}")
 
     call_smplx_operator('smplx_update_joint_locations')
 
@@ -107,22 +157,44 @@ def load_smplx_animation(file, obj):
     body_poses = {**body_poses, **left_hand_poses, **right_hand_poses}
     body_poses['pelvis'] = global_orients
 
+    for bone_name in body_poses:
+        bone = armature.pose.bones.get(bone_name)
+        if bone is not None:
+            bone.rotation_mode = "QUATERNION"
+
     animation_data = armature.animation_data_create()
-    action = animation_data.action = bpy.data.actions.new(f'{armature.name}Action')
+    if action_name is None:
+        action_name = f"{armature.name}Action"
+    existing_action = bpy.data.actions.get(action_name)
+    if existing_action is not None:
+        bpy.data.actions.remove(existing_action)
+    action = animation_data.action = bpy.data.actions.new(action_name)
+    keyframe_numbers = range(start_frame, start_frame + num_keyframes)
     for i in range(3):
         fcurve = action.fcurves.new('pose.bones["root"].location', index=i)
         fcurve.keyframe_points.add(count=num_keyframes)
-        fcurve.keyframe_points.foreach_set("co", [x for co in zip(range(num_keyframes), translation[:, i]) for x in co])
+        fcurve.keyframe_points.foreach_set(
+            "co",
+            [x for co in zip(keyframe_numbers, translation[:, i]) for x in co],
+        )
+        _set_linear_keyframes(fcurve)
         fcurve.update()
     for bone_name, quaternions in body_poses.items():
         for i in range(4):
             fcurve = action.fcurves.new(f'pose.bones["{bone_name}"].rotation_quaternion', index=i)
             fcurve.keyframe_points.add(count=num_keyframes)
             fcurve.keyframe_points.foreach_set("co",
-                                               [x for co in zip(range(num_keyframes), quaternions[:, i]) for x in co])
+                                               [x for co in zip(keyframe_numbers, quaternions[:, i]) for x in co])
+            _set_linear_keyframes(fcurve)
             fcurve.update()
 
-    bpy.context.scene.frame_set(0)
+    scene = bpy.context.scene
+    scene.frame_start = start_frame
+    scene.frame_end = start_frame + num_keyframes - 1
+    scene.frame_preview_start = scene.frame_start
+    scene.frame_preview_end = scene.frame_end
+    scene.render.fps = int(fps)
+    scene.frame_set(start_frame)
 
     # Activate corrective poseshapes
     call_smplx_operator('smplx_set_poseshapes')
@@ -133,9 +205,7 @@ def load_smplx_animation(file, obj):
 def get_quat_from_rodrigues(rodrigues, rodrigues_reference=None):
     rod = Vector((rodrigues[0], rodrigues[1], rodrigues[2]))
     angle_rad = rod.length
-    axis = rod.normalized()
-
-    quat = Quaternion(axis, angle_rad)
+    quat = Quaternion((1.0, 0.0, 0.0, 0.0)) if angle_rad < 1e-12 else Quaternion(rod.normalized(), angle_rad)
 
     if rodrigues_reference is None:
        return quat
@@ -143,8 +213,11 @@ def get_quat_from_rodrigues(rodrigues, rodrigues_reference=None):
         rod_reference = Vector((rodrigues_reference[0], rodrigues_reference[1], rodrigues_reference[2]))
         rod_result = rod + rod_reference
         angle_rad_result = rod_result.length
-        axis_result = rod_result.normalized()
-        quat_result = Quaternion(axis_result, angle_rad_result)
+        quat_result = (
+            Quaternion((1.0, 0.0, 0.0, 0.0))
+            if angle_rad_result < 1e-12
+            else Quaternion(rod_result.normalized(), angle_rad_result)
+        )
         return quat_result
 
 

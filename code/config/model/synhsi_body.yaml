@@ -27,6 +27,10 @@ synhsi_body:
   human_object_query_num_points: ${human_object_query_num_points}
   human_object_query_margin: ${human_object_collision_margin}
   human_object_query_joint_ids: ${human_object_query_joint_ids}
+  use_bps_object_geometry: ${use_bps_object_geometry}
+  bps_num_points: ${dataset.bps_num_points}
+  bps_radius: ${dataset.bps_radius}
+  bps_seed: ${dataset.bps_seed}
   object_motion_dim: 9
   trajectory_anchor_stride: 4
   num_scene_query_frames: 8

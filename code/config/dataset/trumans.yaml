@@ -35,6 +35,10 @@ max_samples: 0
 # Object conditions: object_motion is translation + 6D rotation, object_points
 # are fixed-size point samples from trumans/Object/*.npy.
 object_num_points: 1024
+# Shared vector-BPS geometry used by the global token and dynamic surface proxies.
+bps_num_points: 256
+bps_radius: 1.0
+bps_seed: 12345
 normalize_object_motion: true
 
 joints_ind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]

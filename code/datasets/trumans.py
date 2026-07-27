@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from bps_utils import encode_bps, make_bps_basis
+
 try:
     from scipy.spatial.transform import Rotation as R
 except ModuleNotFoundError:
@@ -92,6 +94,9 @@ class TrumansDataset(Dataset):
             test_ratio=0.1,
             max_samples=0,
             object_num_points=512,
+            bps_num_points=256,
+            bps_radius=1.0,
+            bps_seed=12345,
             normalize_object_motion=True,
             motion_state_len=0,
             motion_state_prefix_len=None,
@@ -118,6 +123,10 @@ class TrumansDataset(Dataset):
         self.split_seed = int(split_seed)
         self.split_ratios = (float(train_ratio), float(val_ratio), float(test_ratio))
         self.object_num_points = int(object_num_points)
+        self.bps_num_points = int(bps_num_points)
+        self.bps_radius = float(bps_radius)
+        self.bps_seed = int(bps_seed)
+        self.bps_basis = make_bps_basis(self.bps_num_points, self.bps_radius, self.bps_seed)
         self.normalize_object_motion = bool(normalize_object_motion)
         self.motion_state_len = max(0, int(motion_state_len or 0))
         self.motion_state_prefix_len = int(motion_state_prefix_len or kwargs.get("auto_regre_num", 2))
@@ -160,6 +169,7 @@ class TrumansDataset(Dataset):
 
         self.object_files = sorted((self.folder / "Object").glob("*.npy"))
         self.object_points_cache = {}
+        self.object_bps_cache = {}
 
         self.scene_occ = None
         self.scene_dict = {}
@@ -264,15 +274,25 @@ class TrumansDataset(Dataset):
         self.object_points_cache[object_id] = points.astype(np.float32)
         return self.object_points_cache[object_id]
 
+    def _object_bps(self, object_id):
+        if object_id in self.object_bps_cache:
+            return self.object_bps_cache[object_id]
+        points = np.asarray(np.load(self.object_files[object_id]), dtype=np.float32)
+        residuals, _, _ = encode_bps(points, self.bps_basis)
+        self.object_bps_cache[object_id] = residuals
+        return residuals
+
     def _object_condition(self, frame_ids, valid, init_shift, local_rot):
         object_motion = np.zeros((self.max_window_size, 9), dtype=np.float32)
         object_points = np.zeros((self.object_num_points, 3), dtype=np.float32)
+        object_bps = np.zeros((self.bps_num_points, 3), dtype=np.float32)
         object_goal = np.zeros(3, dtype=np.float32)
         object_id = self._primary_object_id(frame_ids, valid)
         if object_id is None or object_id >= len(self.object_files):
-            return object_motion, object_points, object_goal, False
+            return object_motion, object_points, object_bps, object_goal, False
 
         rest_points = self._sample_object_points(object_id)
+        object_bps = self._object_bps(object_id)
         first_local_mat = None
         valid_ids = frame_ids[valid]
         flags = np.asarray(self.object_flag[valid_ids, object_id], dtype=np.int16)
@@ -304,9 +324,9 @@ class TrumansDataset(Dataset):
             if self.normalize_enabled and self.normalize_object_motion:
                 object_points = _normalize_points(object_points, self.min, self.max)
         else:
-            return object_motion, object_points, object_goal, False
+            return object_motion, object_points, object_bps, object_goal, False
 
-        return object_motion, object_points.astype(np.float32), object_goal, True
+        return object_motion, object_points.astype(np.float32), object_bps, object_goal, True
 
     def __getitem__(self, idx):
         src_idx = int(self.indices[idx])
@@ -327,13 +347,20 @@ class TrumansDataset(Dataset):
         if self.load_language:
             text_emb[:valid_len] = np.asarray(self.action_label[frame_ids[valid]], dtype=np.float32)
 
-        object_motion, object_points, object_goal, object_present = self._object_condition(
+        object_motion, object_points, object_bps, object_goal, object_present = self._object_condition(
             frame_ids, valid, init_shift, local_rot
         )
         extra = {
             "object_motion": object_motion.astype(np.float32),
             "object_points": object_points.astype(np.float32),
+            "object_bps": object_bps.astype(np.float32),
             "object_goal": object_goal.astype(np.float32),
+            "object_norm_min": self.min.astype(np.float32),
+            "object_norm_max": self.max.astype(np.float32),
+            "object_geometry_normalized": np.asarray(
+                self.normalize_enabled and self.normalize_object_motion,
+                dtype=np.bool_,
+            ),
         }
         if motion_state is not None:
             extra["motion_state"] = motion_state

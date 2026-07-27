@@ -1,10 +1,12 @@
 import torch
 
 from models.synhsi import (
+    ObjectEncoder,
     DynamicSceneQuery,
     HumanObjectCrossQuery,
     HumanSceneInteractionEncoder,
     Unet,
+    decode_bps_surface_points,
     human_object_collision_loss,
     temporal_upsample,
 )
@@ -166,6 +168,73 @@ def test_human_object_cross_query_uses_object_points_and_presence_mask():
     assert tokens.shape == (2, 4, 16)
     assert tokens[1].abs().max().item() == 0.0
     assert not torch.allclose(tokens[0], shifted_tokens[0])
+
+
+def test_vector_bps_encoder_and_dynamic_surface_decode():
+    encoder = ObjectEncoder(
+        dim_output=8,
+        use_bps=True,
+        bps_num_points=1,
+        bps_radius=1.0,
+        bps_seed=7,
+    )
+    object_bps = torch.zeros(1, 1, 3)
+    object_present = torch.ones(1, dtype=torch.bool)
+    token = encoder(
+        object_points=None,
+        object_present=object_present,
+        batch_size=1,
+        device=torch.device("cpu"),
+        object_bps=object_bps,
+    )
+    assert token.shape == (1, 1, 8)
+
+    basis = torch.tensor([[1.0, 0.0, 0.0]])
+    object_motion = torch.tensor(
+        [[
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0, 0.0],
+        ]]
+    )
+    proxies = decode_bps_surface_points(
+        object_bps=object_bps,
+        object_motion=object_motion,
+        basis_points=basis,
+        object_present=object_present,
+    )
+    assert proxies.shape == (1, 2, 1, 3)
+    assert torch.allclose(proxies[0, 0, 0], torch.tensor([1.0, 0.0, 0.0]), atol=1e-6)
+    assert torch.allclose(proxies[0, 1, 0], torch.tensor([1.0, 1.0, 0.0]), atol=1e-6)
+
+    normalized_proxy = decode_bps_surface_points(
+        object_bps=object_bps,
+        object_motion=object_motion[:, :1],
+        basis_points=basis,
+        object_present=object_present,
+        object_norm_min=torch.tensor([[0.0, 0.0, 0.0]]),
+        object_norm_max=torch.tensor([[2.0, 4.0, 6.0]]),
+        object_geometry_normalized=torch.ones(1, dtype=torch.bool),
+    )
+    assert torch.allclose(
+        normalized_proxy[0, 0, 0],
+        torch.tensor([1.0, 0.0, 0.0]),
+        atol=1e-6,
+    )
+
+
+def test_human_object_query_accepts_dynamic_surface_proxies():
+    query = HumanObjectCrossQuery(
+        dim_model=8,
+        dim_human=6,
+        max_object_points=4,
+        collision_margin=0.2,
+    )
+    human = torch.zeros(1, 2, 6)
+    dynamic_points = torch.zeros(1, 2, 4, 3)
+    dynamic_points[:, 1, :, 0] = 1.0
+    tokens = query(human, dynamic_points, torch.ones(1, dtype=torch.bool))
+    assert tokens.shape == (1, 2, 8)
+    assert not torch.allclose(tokens[:, 0], tokens[:, 1])
 
 
 def test_human_scene_interaction_encoder_uses_body_and_scene():

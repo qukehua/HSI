@@ -61,6 +61,7 @@ def test_omomo_adapter_uses_official_splits_and_flowhsi_batch_shape(tmp_path):
         batch_size=1,
         max_window_size=4,
         object_num_points=4,
+        bps_num_points=8,
         train_file="train.p",
         test_file="test.p",
         stats_file="stats.p",
@@ -79,6 +80,10 @@ def test_omomo_adapter_uses_official_splits_and_flowhsi_batch_shape(tmp_path):
     assert batch[14].item() is True
     assert batch[16]["object_motion"].shape == (4, 9)
     assert batch[16]["object_points"].shape == (4, 3)
+    assert batch[16]["object_bps"].shape == (8, 3)
+    assert batch[16]["object_norm_min"].shape == (3,)
+    assert batch[16]["object_norm_max"].shape == (3,)
+    assert batch[16]["object_geometry_normalized"].item() is True
     assert batch[16]["motion_state"].shape == (2, 72)
 
     converted = dataset.denormalize(batch[0][:3].reshape(3, 24, 3))

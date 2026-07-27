@@ -177,6 +177,19 @@ not use them for validation. To explicitly monitor the official test set, add
 
 The training script instantiates the dataloader from the selected dataset config, builds the conditional Flow Matching sampler from `./code/config/sampler/pelvis.yaml`, and trains the model using the configurations in `./code/config`.
 
+### Hybrid BPS object geometry
+
+TRUMANS and OMOMO encode object shape with 256 deterministic basis points in
+the object-local metric frame. The global object token is computed from vector
+BPS residuals. The same residuals reconstruct surface proxy points, which are
+placed at each frame using the 9-D object motion condition (3-D translation and
+6-D rotation). Human-object cross queries and the collision loss operate on
+these dynamic proxies. The original sampled point cloud remains available as a
+fallback for data without BPS fields. Object-conditioned checkpoints trained
+before this change do not contain the BPS encoder parameters and should be
+retrained. The basis size, radius, and seed are configured by
+`bps_num_points`, `bps_radius`, and `bps_seed` in the dataset configuration.
+
 ## Model Evaluation
 
 

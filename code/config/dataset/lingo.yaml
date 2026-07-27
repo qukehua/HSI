@@ -28,3 +28,6 @@ scene_mode: ${scene_mode}
 joints_ind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 34, 40, 49]
 nb_joints: 28
 language_feature_dim: 768
+bps_num_points: 256
+bps_radius: 1.0
+bps_seed: 12345

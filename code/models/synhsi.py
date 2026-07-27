@@ -6,6 +6,7 @@ from typing import Dict, Optional
 from vit_pytorch import ViT
 from tqdm import tqdm
 from utils import *
+from bps_utils import make_bps_basis
 
 
 class Sampler:
@@ -121,6 +122,10 @@ class Sampler:
             object_motion=None,
             object_goal=None,
             object_points=None,
+            object_bps=None,
+            object_norm_min=None,
+            object_norm_max=None,
+            object_geometry_normalized=None,
             motion_state=None,
             motion_state_mask=None,
             noise=None,
@@ -211,6 +216,10 @@ class Sampler:
             object_motion=object_motion,
             object_goal=object_goal,
             object_points=object_points,
+            object_bps=object_bps,
+            object_norm_min=object_norm_min,
+            object_norm_max=object_norm_max,
+            object_geometry_normalized=object_geometry_normalized,
             object_present=object_present,
             motion_state=motion_state,
             motion_state_mask=motion_state_mask,
@@ -270,9 +279,14 @@ class Sampler:
                 pos_weight=pos_weight,
             )
             pred_x0 = self.predict_x0_from_field(x_noisy, t, predicted_field)
+            collision_geometry = (
+                model_out.get("object_surface_points", object_points)
+                if isinstance(model_out, dict)
+                else object_points
+            )
             human_object_collision_loss_value = human_object_collision_loss(
                 pred_x0,
-                object_points=object_points,
+                object_points=collision_geometry,
                 object_present=object_present,
                 valid_mask=valid_mask,
                 margin=self.human_object_collision_margin,
@@ -338,6 +352,10 @@ class Sampler:
             object_motion=None,
             object_goal=None,
             object_points=None,
+            object_bps=None,
+            object_norm_min=None,
+            object_norm_max=None,
+            object_geometry_normalized=None,
             object_present=None,
     ):
         device = next(self.model.parameters()).device
@@ -375,6 +393,10 @@ class Sampler:
                 object_motion=object_motion,
                 object_goal=object_goal,
                 object_points=object_points,
+                object_bps=object_bps,
+                object_norm_min=object_norm_min,
+                object_norm_max=object_norm_max,
+                object_geometry_normalized=object_geometry_normalized,
                 object_present=object_present,
                 return_model_out=(i == 0),
             )
@@ -397,7 +419,9 @@ class Sampler:
     def p_sample(self, model, x, fixed_points, mat, scene_flag, t, t_index,
                  text_emb, pelvis_goal, hand_goal, is_pick, need_scene, need_pelvis_dir, pi, need_pi, is_loco,
                  motion_state=None, motion_state_mask=None,
-                 object_motion=None, object_goal=None, object_points=None, object_present=None,
+                 object_motion=None, object_goal=None, object_points=None,
+                 object_bps=None, object_norm_min=None, object_norm_max=None,
+                 object_geometry_normalized=None, object_present=None,
                  return_model_out=False):
         if self.dataset.load_scene:
             x_orig = transform_points(self.dataset.denormalize_torch(x), mat)
@@ -465,6 +489,10 @@ class Sampler:
             object_motion=object_motion,
             object_goal=object_goal,
             object_points=object_points,
+            object_bps=object_bps,
+            object_norm_min=object_norm_min,
+            object_norm_max=object_norm_max,
+            object_geometry_normalized=object_geometry_normalized,
             object_present=object_present,
             motion_state=motion_state,
             motion_state_mask=motion_state_mask,
@@ -571,6 +599,137 @@ def _joint_ids_tensor(joint_ids, num_joints: int, device) -> Optional[torch.Tens
     return ids
 
 
+def rotation_6d_to_matrix(rotation_6d: torch.Tensor) -> torch.Tensor:
+    """Invert the column-major 6D rotation representation used by the datasets."""
+    if rotation_6d.shape[-1] != 6:
+        raise ValueError(f"Expected 6D rotations, got shape {rotation_6d.shape}.")
+    first = rotation_6d[..., [0, 2, 4]]
+    second = rotation_6d[..., [1, 3, 5]]
+    first_norm = first.norm(dim=-1, keepdim=True)
+    b1 = first / first_norm.clamp_min(1e-8)
+    second_ortho = second - (b1 * second).sum(dim=-1, keepdim=True) * b1
+    second_norm = second_ortho.norm(dim=-1, keepdim=True)
+    b2 = second_ortho / second_norm.clamp_min(1e-8)
+    b3 = torch.cross(b1, b2, dim=-1)
+    rotation = torch.stack([b1, b2, b3], dim=-1)
+
+    invalid = (first_norm < 1e-8) | (second_norm < 1e-8)
+    if bool(invalid.any()):
+        identity = torch.eye(3, device=rotation.device, dtype=rotation.dtype)
+        rotation = torch.where(invalid[..., None], identity, rotation)
+    return rotation
+
+
+def _prepare_object_bounds(value, batch_size, device, dtype):
+    if value is None:
+        return None
+    value = torch.as_tensor(value, device=device, dtype=dtype)
+    if value.ndim == 1:
+        value = value.unsqueeze(0)
+    if value.shape[0] == 1 and batch_size > 1:
+        value = value.repeat(batch_size, 1)
+    if value.shape != (batch_size, 3):
+        raise ValueError(f"Expected object bounds with shape [{batch_size}, 3], got {value.shape}.")
+    return value
+
+
+def decode_bps_surface_points(
+        object_bps: Optional[torch.Tensor],
+        object_motion: Optional[torch.Tensor],
+        basis_points: torch.Tensor,
+        object_present: Optional[torch.Tensor] = None,
+        object_norm_min: Optional[torch.Tensor] = None,
+        object_norm_max: Optional[torch.Tensor] = None,
+        object_geometry_normalized: Optional[torch.Tensor] = None,
+) -> Optional[torch.Tensor]:
+    """Decode vector-BPS proxies and place them at every object pose."""
+    if object_bps is None or object_motion is None:
+        return None
+    object_bps = torch.as_tensor(object_bps, device=basis_points.device, dtype=basis_points.dtype)
+    object_motion = torch.as_tensor(object_motion, device=basis_points.device, dtype=basis_points.dtype)
+    if object_bps.ndim == 2:
+        object_bps = object_bps.unsqueeze(0)
+    if object_motion.ndim == 2:
+        object_motion = object_motion.unsqueeze(0)
+    batch_size = object_bps.shape[0]
+    if object_motion.shape[0] == 1 and batch_size > 1:
+        object_motion = object_motion.repeat(batch_size, 1, 1)
+    if object_motion.shape[0] != batch_size or object_motion.shape[-1] < 9:
+        raise ValueError(
+            f"Expected object motion with shape [{batch_size}, T, >=9], got {object_motion.shape}."
+        )
+    if object_bps.shape[1:] != basis_points.shape:
+        raise ValueError(
+            f"BPS residual shape {object_bps.shape[1:]} does not match basis shape {basis_points.shape}."
+        )
+
+    local_proxies = basis_points.unsqueeze(0) + object_bps
+    rotations = rotation_6d_to_matrix(object_motion[..., 3:9])
+    translations = object_motion[..., :3]
+
+    norm_min = _prepare_object_bounds(
+        object_norm_min,
+        batch_size,
+        object_bps.device,
+        object_bps.dtype,
+    )
+    norm_max = _prepare_object_bounds(
+        object_norm_max,
+        batch_size,
+        object_bps.device,
+        object_bps.dtype,
+    )
+    normalized_mask = _batch_bool_mask(
+        object_geometry_normalized,
+        batch_size,
+        object_bps.device,
+        default=False,
+    )
+    if bool(normalized_mask.any()):
+        if norm_min is None or norm_max is None:
+            raise ValueError("Normalized object geometry requires object_norm_min and object_norm_max.")
+        scale = (norm_max - norm_min).clamp_min(1e-8)
+        denormalized_translations = (
+            (translations + 1.0) * scale[:, None, :] / 2.0
+            + norm_min[:, None, :]
+        )
+        translations_physical = torch.where(
+            normalized_mask[:, None, None],
+            denormalized_translations,
+            translations,
+        )
+    else:
+        scale = None
+        translations_physical = translations
+
+    proxies_physical = torch.einsum(
+        "bmk,btik->btmi",
+        local_proxies,
+        rotations,
+    ) + translations_physical[:, :, None, :]
+
+    if bool(normalized_mask.any()):
+        proxies_normalized = (
+            -1.0
+            + 2.0
+            * (proxies_physical - norm_min[:, None, None, :])
+            / scale[:, None, None, :]
+        )
+        proxies_physical = torch.where(
+            normalized_mask[:, None, None, None],
+            proxies_normalized,
+            proxies_physical,
+        )
+
+    present_mask = _batch_bool_mask(
+        object_present,
+        batch_size,
+        object_bps.device,
+        default=True,
+    )
+    return proxies_physical * present_mask.to(proxies_physical.dtype).view(batch_size, 1, 1, 1)
+
+
 def _prepare_object_points(
         object_points: Optional[torch.Tensor],
         batch_size: int,
@@ -586,17 +745,22 @@ def _prepare_object_points(
     if object_points.ndim == 2:
         object_points = object_points.unsqueeze(0)
     if object_points.shape[0] == 1 and batch_size > 1:
-        object_points = object_points.repeat(batch_size, 1, 1)
-    if object_points.shape[0] != batch_size or object_points.shape[-1] != 3:
+        repeats = [batch_size] + [1] * (object_points.ndim - 1)
+        object_points = object_points.repeat(*repeats)
+    if (
+        object_points.ndim not in (3, 4)
+        or object_points.shape[0] != batch_size
+        or object_points.shape[-1] != 3
+    ):
         return None
-    if max_object_points > 0 and object_points.shape[1] > max_object_points:
+    if max_object_points > 0 and object_points.shape[-2] > max_object_points:
         sample_idx = torch.linspace(
             0,
-            object_points.shape[1] - 1,
+            object_points.shape[-2] - 1,
             max_object_points,
             device=device,
         ).round().long()
-        object_points = object_points.index_select(1, sample_idx)
+        object_points = object_points.index_select(-2, sample_idx)
     return object_points
 
 
@@ -633,10 +797,20 @@ def human_object_collision_loss(
         dtype=human_motion.dtype,
         max_object_points=max_object_points,
     )
-    if sampled_object_points is None or sampled_object_points.shape[1] == 0:
+    if sampled_object_points is None or sampled_object_points.shape[-2] == 0:
         return zero
 
-    diff = human_points.unsqueeze(3) - sampled_object_points[:, None, None, :, :]
+    if sampled_object_points.ndim == 3:
+        object_for_distance = sampled_object_points[:, None, None, :, :]
+    else:
+        if sampled_object_points.shape[1] == 1 and seq_len > 1:
+            sampled_object_points = sampled_object_points.repeat(1, seq_len, 1, 1)
+        if sampled_object_points.shape[1] != seq_len:
+            raise ValueError(
+                f"Dynamic object geometry has {sampled_object_points.shape[1]} frames; expected {seq_len}."
+            )
+        object_for_distance = sampled_object_points[:, :, None, :, :]
+    diff = human_points.unsqueeze(3) - object_for_distance
     min_dist = torch.sqrt(diff.pow(2).sum(dim=-1).clamp_min(1e-12)).min(dim=-1).values
     penetration = (float(margin) - min_dist).clamp_min(0.0).pow(2)
 
@@ -743,9 +917,30 @@ class MotionStateEncoder(nn.Module):
 
 
 class ObjectEncoder(nn.Module):
-    """PointNet-style object geometry encoder with a per-sample presence switch."""
-    def __init__(self, dim_output: int, point_dim: int = 3):
+    """Hybrid vector-BPS encoder with a point-cloud fallback for old inputs."""
+    def __init__(
+            self,
+            dim_output: int,
+            point_dim: int = 3,
+            use_bps: bool = True,
+            bps_num_points: int = 256,
+            bps_radius: float = 1.0,
+            bps_seed: int = 12345,
+    ):
         super().__init__()
+        self.use_bps = bool(use_bps)
+        self.bps_num_points = int(bps_num_points)
+        basis = make_bps_basis(self.bps_num_points, bps_radius, bps_seed)
+        self.register_buffer(
+            "bps_basis",
+            torch.as_tensor(basis, dtype=torch.float32),
+            persistent=True,
+        )
+        self.bps_net = nn.Sequential(
+            nn.Linear(self.bps_num_points * 3, dim_output),
+            nn.SiLU(inplace=False),
+            nn.Linear(dim_output, dim_output),
+        )
         self.point_mlp = nn.Sequential(
             nn.Linear(point_dim, dim_output),
             nn.SiLU(inplace=False),
@@ -763,8 +958,21 @@ class ObjectEncoder(nn.Module):
             object_present: torch.Tensor,
             batch_size: int,
             device,
+            object_bps: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        if object_points is None:
+        if self.use_bps and object_bps is not None:
+            object_bps = torch.as_tensor(object_bps, device=device, dtype=torch.float32)
+            if object_bps.ndim == 2:
+                object_bps = object_bps.unsqueeze(0)
+            if object_bps.shape[0] == 1 and batch_size > 1:
+                object_bps = object_bps.repeat(batch_size, 1, 1)
+            expected_shape = (batch_size, self.bps_num_points, 3)
+            if object_bps.shape != expected_shape:
+                raise ValueError(
+                    f"Expected vector-BPS residuals with shape {expected_shape}, got {object_bps.shape}."
+                )
+            feat = self.bps_net(object_bps.reshape(batch_size, -1))
+        elif object_points is None:
             feat = torch.zeros(batch_size, self.out[-1].out_features, device=device)
         else:
             if object_points.ndim == 2:
@@ -1153,14 +1361,23 @@ class HumanObjectCrossQuery(nn.Module):
             dtype=dtype,
             max_object_points=self.max_object_points,
         )
-        if sampled_object_points is None or sampled_object_points.shape[1] == 0:
+        if sampled_object_points is None or sampled_object_points.shape[-2] == 0:
             return zero_tokens
 
         human_points = human_motion.reshape(batch_size, seq_len, self.num_joints, 3)
         if not self.use_all_joints:
             human_points = human_points.index_select(2, self.query_joint_ids.to(device=device))
 
-        object_for_query = sampled_object_points[:, None, None, :, :]
+        if sampled_object_points.ndim == 3:
+            object_for_query = sampled_object_points[:, None, None, :, :]
+        else:
+            if sampled_object_points.shape[1] == 1 and seq_len > 1:
+                sampled_object_points = sampled_object_points.repeat(1, seq_len, 1, 1)
+            if sampled_object_points.shape[1] != seq_len:
+                raise ValueError(
+                    f"Dynamic object geometry has {sampled_object_points.shape[1]} frames; expected {seq_len}."
+                )
+            object_for_query = sampled_object_points[:, :, None, :, :]
         diff = human_points.unsqueeze(3) - object_for_query
         dist2 = diff.pow(2).sum(dim=-1).clamp_min(1e-12)
         min_dist2, min_idx = dist2.min(dim=-1)
@@ -1334,6 +1551,10 @@ class Unet(nn.Module):
         self.human_object_query_num_points = int(kwargs.get("human_object_query_num_points", 64))
         self.human_object_query_joint_ids = kwargs.get("human_object_query_joint_ids", None)
         self.human_object_query_margin = float(kwargs.get("human_object_query_margin", 0.05))
+        self.use_bps_object_geometry = bool(kwargs.get("use_bps_object_geometry", True))
+        self.bps_num_points = int(kwargs.get("bps_num_points", 256))
+        self.bps_radius = float(kwargs.get("bps_radius", 1.0))
+        self.bps_seed = int(kwargs.get("bps_seed", 12345))
         vit_channels = 0
 
         if self.scene_type == 'plane':
@@ -1384,7 +1605,14 @@ class Unet(nn.Module):
             )
 
         if self.use_object:
-            self.embedding_object = ObjectEncoder(dim_output=dim_model, point_dim=object_point_dim)
+            self.embedding_object = ObjectEncoder(
+                dim_output=dim_model,
+                point_dim=object_point_dim,
+                use_bps=self.use_bps_object_geometry,
+                bps_num_points=self.bps_num_points,
+                bps_radius=self.bps_radius,
+                bps_seed=self.bps_seed,
+            )
             self.embedding_object_goal = VectorConditionEncoder(dim_input=3, dim_output=dim_model)
 
         self.embedding_human_scene = None
@@ -1474,6 +1702,10 @@ class Unet(nn.Module):
             object_motion=None,
             object_goal=None,
             object_points=None,
+            object_bps=None,
+            object_norm_min=None,
+            object_norm_max=None,
+            object_geometry_normalized=None,
             object_present=None,
             motion_state=None,
             motion_state_mask=None,
@@ -1488,6 +1720,19 @@ class Unet(nn.Module):
             device,
             default=False,
         )
+        object_surface_points = object_points
+        if self.use_object and self.use_bps_object_geometry and object_bps is not None:
+            decoded_surface = decode_bps_surface_points(
+                object_bps=object_bps,
+                object_motion=object_motion,
+                basis_points=self.embedding_object.bps_basis,
+                object_present=object_present,
+                object_norm_min=object_norm_min,
+                object_norm_max=object_norm_max,
+                object_geometry_normalized=object_geometry_normalized,
+            )
+            if decoded_surface is not None:
+                object_surface_points = decoded_surface
 
         if not self.load_scene:
             scene_emb = torch.zeros_like(t_emb)
@@ -1525,7 +1770,13 @@ class Unet(nn.Module):
         ]
 
         if self.use_object:
-            object_emb = self.embedding_object(object_points, object_present, batch_size, device)
+            object_emb = self.embedding_object(
+                object_points,
+                object_present,
+                batch_size,
+                device,
+                object_bps=object_bps,
+            )
             if object_goal is not None:
                 object_goal_emb = self.embedding_object_goal(object_goal.to(device=device, dtype=x.dtype))
                 object_emb = object_emb + object_goal_emb
@@ -1585,6 +1836,7 @@ class Unet(nn.Module):
                 "completion_logits": aux_out["completion_logits"],
                 "completion_prob": aux_out["completion_prob"],
                 "object_present": object_present,
+                "object_surface_points": object_surface_points,
             }
 
             if return_dict:
@@ -1601,14 +1853,14 @@ class Unet(nn.Module):
             scene_grid=cond,
             pelvis_traj_dense=pelvis_dense,
             object_traj_dense=object_dense,
-            object_geometry=object_points,
+            object_geometry=object_surface_points,
             object_present=object_present,
         )
         human_object_tokens = None
         if self.human_object_cross_query is not None:
             human_object_tokens = self.human_object_cross_query(
                 human_motion=x,
-                object_points=object_points,
+                object_points=object_surface_points,
                 object_present=object_present,
             )
         local_out = self.local_branch(
@@ -1637,6 +1889,7 @@ class Unet(nn.Module):
             "completion_logits": aux_out["completion_logits"],
             "completion_prob": aux_out["completion_prob"],
             "object_present": object_present,
+            "object_surface_points": object_surface_points,
         }
 
         if return_dict:

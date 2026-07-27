@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from bps_utils import encode_bps, make_bps_basis
+
 try:
     import joblib
 except ModuleNotFoundError:  # pragma: no cover - joblib is part of requirements.txt
@@ -117,6 +119,9 @@ class OmomoDataset(Dataset):
             max_train_samples=0,
             max_test_samples=0,
             object_num_points=1024,
+            bps_num_points=256,
+            bps_radius=1.0,
+            bps_seed=12345,
             normalize=True,
             convert_z_up_to_y_up=True,
             mmap_mode=None,
@@ -140,6 +145,10 @@ class OmomoDataset(Dataset):
         self.use_pi = bool(use_pi)
         self.max_window_size = int(max_window_size)
         self.object_num_points = int(object_num_points)
+        self.bps_num_points = int(bps_num_points)
+        self.bps_radius = float(bps_radius)
+        self.bps_seed = int(bps_seed)
+        self.bps_basis = make_bps_basis(self.bps_num_points, self.bps_radius, self.bps_seed)
         self.motion_state_len = max(0, int(motion_state_len or 0))
         self.motion_state_prefix_len = int(motion_state_prefix_len or kwargs.get("auto_regre_num", 2))
         self.language_feature_dim = int(language_feature_dim)
@@ -258,6 +267,16 @@ class OmomoDataset(Dataset):
             points = _normalize_points(points, self.min, self.max)
         return points.astype(np.float32)
 
+    def _object_bps(self, object_points, object_translation, object_rotation):
+        points = np.asarray(object_points, dtype=np.float32)
+        if self.normalize_enabled:
+            points = (points + 1.0) * (self.max - self.min) / 2.0 + self.min
+        local_points = (
+            points - np.asarray(object_translation, dtype=np.float32).reshape(1, 3)
+        ) @ np.asarray(object_rotation, dtype=np.float32)
+        residuals, _, _ = encode_bps(local_points, self.bps_basis)
+        return residuals
+
     def _motion_state(self, motion, valid_len):
         if self.motion_state_len <= 0:
             return None, None
@@ -305,18 +324,25 @@ class OmomoDataset(Dataset):
         object_centers = object_centers @ self.coord_transform.T
         object_rotations = np.asarray(record["obj_rot_mat"], dtype=np.float32)[frame_ids]
         object_motion = np.zeros((self.max_window_size, 9), dtype=np.float32)
+        converted_rotations = np.zeros((valid_len, 3, 3), dtype=np.float32)
         object_translation = object_centers
         if self.normalize_enabled:
             object_translation = _normalize_points(object_translation, self.min, self.max)
         object_motion[:valid_len, :3] = object_translation
         for local_idx, rotation in enumerate(object_rotations):
             converted_rotation = self.coord_transform @ rotation @ self.coord_transform.T
+            converted_rotations[local_idx] = converted_rotation
             object_motion[local_idx, 3:] = _rotation_6d(converted_rotation)
 
         seq_name = str(record.get("seq_name", "unknown_object_000"))
         parts = seq_name.split("_")
         object_name = parts[1] if len(parts) > 1 else seq_name
         object_points = self._object_points(record, object_name, int(frame_ids[0]))
+        object_bps = self._object_bps(
+            object_points,
+            object_centers[0],
+            converted_rotations[0],
+        )
         object_goal = object_centers[-1].astype(np.float32)
         motion_state, motion_state_mask = self._motion_state(
             motion.reshape(valid_len, 72), valid_len
@@ -324,7 +350,14 @@ class OmomoDataset(Dataset):
         extra = {
             "object_motion": object_motion,
             "object_points": object_points,
+            "object_bps": object_bps,
             "object_goal": object_goal,
+            "object_norm_min": self.min.astype(np.float32),
+            "object_norm_max": self.max.astype(np.float32),
+            "object_geometry_normalized": np.asarray(
+                self.normalize_enabled,
+                dtype=np.bool_,
+            ),
         }
         if motion_state is not None:
             extra["motion_state"] = motion_state
