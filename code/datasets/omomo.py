@@ -1,4 +1,5 @@
 import pickle
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +7,7 @@ import torch
 from torch.utils.data import Dataset
 
 from bps_utils import encode_bps, make_bps_basis
+from object_sdf import ObjectSDFStore
 
 try:
     import joblib
@@ -114,6 +116,9 @@ class OmomoDataset(Dataset):
             test_file="test_diffusion_manip_window_120_processed_joints24.p",
             stats_file="min_max_mean_std_data_window_120_cano_joints24.p",
             object_mesh_dir="captured_objects",
+            load_object_sdf=False,
+            object_sdf_dir="rest_object_sdf_256_npy_files",
+            object_sdf_excluded_objects=(),
             load_train=True,
             load_test=True,
             max_train_samples=0,
@@ -156,6 +161,20 @@ class OmomoDataset(Dataset):
         self.coord_transform = _Z_UP_TO_Y_UP if convert_z_up_to_y_up else np.eye(3, dtype=np.float32)
         self.object_mesh_dir = self.folder / object_mesh_dir
         self.object_vertices_cache = {}
+        self.load_object_sdf = bool(load_object_sdf)
+        self.object_sdf_dir = self.folder / object_sdf_dir
+        self.object_sdf_excluded_objects = set(object_sdf_excluded_objects)
+        self.object_sdf_ids = {}
+        if self.load_object_sdf:
+            # Only catalog paths here; the sampler caches grids on its device.
+            self.object_sdf_ids = ObjectSDFStore(self.object_sdf_dir).name_to_id
+            if self.object_sdf_excluded_objects:
+                warnings.warn(
+                    "SDF collision supervision explicitly excludes: "
+                    + ", ".join(sorted(self.object_sdf_excluded_objects))
+                    + ". Supply matching part SDFs before removing these exclusions.",
+                    UserWarning,
+                )
 
         stats_path = self.folder / stats_file
         if not stats_path.exists():
@@ -277,6 +296,45 @@ class OmomoDataset(Dataset):
         residuals, _, _ = encode_bps(local_points, self.bps_basis)
         return residuals
 
+    def _object_sdf_condition(self, record, object_name, frame_ids):
+        """Exact rest-mesh poses, not COM anchors, for up to two rigid parts.
+
+        Human coordinates are y-up; SDF grids retain the original mesh axes.
+        Consequently R_model = coord_transform @ R_raw (no right-hand axis
+        conversion). Distances use the recorded object scale in physical units.
+        """
+        ids = np.full(2, -1, dtype=np.int64)
+        rotations = np.broadcast_to(np.eye(3, dtype=np.float32),
+                                    (self.max_window_size, 2, 3, 3)).copy()
+        translations = np.zeros((self.max_window_size, 2, 3), dtype=np.float32)
+        scales = np.ones((self.max_window_size, 2), dtype=np.float32)
+        if object_name not in self.object_sdf_excluded_objects:
+            parts = [("", "obj")]
+            if object_name in ("mop", "vacuum") and "obj_bottom_trans" in record:
+                parts = [("_top", "obj"), ("_bottom", "obj_bottom")]
+            for part, (suffix, prefix) in enumerate(parts):
+                name = f"{object_name}_cleaned_simplified{suffix}.obj"
+                if name not in self.object_sdf_ids or not (self.object_sdf_dir / f"{name}.json").exists():
+                    raise FileNotFoundError(
+                        f"Missing SDF grid/metadata for {name}. Supply accurate geometry "
+                        "or explicitly add the object to object_sdf_excluded_objects; "
+                        "unsigned distance and convex hulls are not used as fallbacks."
+                    )
+                ids[part] = self.object_sdf_ids[name]
+                valid_len = len(frame_ids)
+                rotations[:valid_len, part] = self.coord_transform @ np.asarray(
+                    record[f"{prefix}_rot_mat"], dtype=np.float32)[frame_ids]
+                translations[:valid_len, part] = np.asarray(
+                    record[f"{prefix}_trans"], dtype=np.float32)[frame_ids].reshape(-1, 3) @ self.coord_transform.T
+                scales[:valid_len, part] = np.asarray(
+                    record[f"{prefix}_scale"], dtype=np.float32)[frame_ids].reshape(-1)
+        return {
+            "object_sdf_ids": ids,
+            "object_sdf_rotations": rotations,
+            "object_sdf_translations": translations,
+            "object_sdf_scales": scales,
+        }
+
     def _motion_state(self, motion, valid_len):
         if self.motion_state_len <= 0:
             return None, None
@@ -359,6 +417,8 @@ class OmomoDataset(Dataset):
                 dtype=np.bool_,
             ),
         }
+        if self.load_object_sdf:
+            extra.update(self._object_sdf_condition(record, object_name, frame_ids))
         if motion_state is not None:
             extra["motion_state"] = motion_state
             extra["motion_state_mask"] = motion_state_mask

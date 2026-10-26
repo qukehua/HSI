@@ -183,12 +183,59 @@ TRUMANS and OMOMO encode object shape with 256 deterministic basis points in
 the object-local metric frame. The global object token is computed from vector
 BPS residuals. The same residuals reconstruct surface proxy points, which are
 placed at each frame using the 9-D object motion condition (3-D translation and
-6-D rotation). Human-object cross queries and the collision loss operate on
-these dynamic proxies. The original sampled point cloud remains available as a
+6-D rotation). Human-object cross queries operate on these dynamic proxies.
+The original sampled point cloud remains available as a
 fallback for data without BPS fields. Object-conditioned checkpoints trained
 before this change do not contain the BPS encoder parameters and should be
 retrained. The basis size, radius, and seed are configured by
 `bps_num_points`, `bps_radius`, and `bps_seed` in the dataset configuration.
+
+### Signed object penetration supervision
+
+The training collision term now queries object SDFs instead of penalizing
+unsigned proximity to surface proxies. With negative SDF values inside an
+object, it minimizes `mean(relu(-sdf_meters - tolerance_m)^2)` over selected
+joints and valid frames with SDF supervision. The default
+`human_object_penetration_tolerance_m: 0.0` penalizes every negative distance;
+zero-distance contact and exterior points receive no penalty. A positive
+tolerance permits that many meters of penetration, not an exterior clearance.
+This is a joint-level soft constraint, not a whole-body collision guarantee.
+
+Before querying, predicted joints are denormalized using the dataset's axis
+ranges. The inverse per-frame mesh translation, rotation, and object scale
+maps them into the SDF rest frame; queried distances are multiplied by the
+object scale to recover meters. OMOMO's SDF xyz layout, metadata, and sign
+follow its [official evaluation implementation](https://github.com/lijiaman/omomo_release/blob/main/evaluation_metrics.py).
+Queries use the original grid resolution with differentiable trilinear
+interpolation. Grid discretization still limits accuracy near the surface;
+points outside the finite grid are not extrapolated as interior.
+
+OMOMO training enables `human_object_collision_mode: sdf` and requires
+`rest_object_sdf_256_npy_files/*.obj.npy` with corresponding `.obj.json`
+metadata under the dataset folder. Each grid is cached by object/device, not
+duplicated across frames or batch items. The dataset sends mesh-origin poses
+from `obj_trans`, `obj_rot_mat`, and `obj_scale`, rather than COM trajectories.
+
+The released mop/vacuum sequences have independently moving top and bottom
+parts, but the supplied SDFs describe whole rest objects. The default explicit
+`dataset.object_sdf_excluded_objects: [mop, vacuum]` therefore excludes them
+and emits a warning. To supervise them, supply matching
+`<object>_cleaned_simplified_top.obj.npy/.json` and
+`<object>_cleaned_simplified_bottom.obj.npy/.json`, then remove the exclusions.
+The loader and loss support the union of these separately posed part SDFs.
+Missing non-excluded geometry raises an error; there is no convex-hull or
+unsigned-distance fallback. `human_object_collision_coverage` logs the fraction
+of valid object frames covered by SDF supervision in each batch. Excluded
+frames do not dilute the mean penetration loss.
+
+TRUMANS and LINGO currently disable this term (`mode: disabled`, weight `0`):
+TRUMANS lacks accurate SDF inputs and LINGO supplies no object geometry.
+Enabling a nonzero SDF loss without a dataset SDF adapter raises an error.
+The former normalized collision margin has been renamed
+`human_object_query_margin`; it remains only a cross-query feature, separate
+from the penetration tolerance in meters. No learned parameter shapes changed,
+but existing checkpoints and reported metrics do not acquire the benefit of
+this new objective without training/fine-tuning and fresh evaluation.
 
 ## Model Evaluation
 

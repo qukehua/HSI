@@ -69,6 +69,7 @@ LOSS_LOG_ORDER = (
     "pelvis_traj",
     "completion",
     "human_object_collision",
+    "human_object_collision_coverage",
 )
 
 
@@ -257,6 +258,10 @@ def validate(model, trainer, dataloader, cfg, device, epoch=0, show_progress=Fal
             object_norm_min=extra.get("object_norm_min"),
             object_norm_max=extra.get("object_norm_max"),
             object_geometry_normalized=extra.get("object_geometry_normalized"),
+            object_sdf_ids=extra.get("object_sdf_ids"),
+            object_sdf_rotations=extra.get("object_sdf_rotations"),
+            object_sdf_translations=extra.get("object_sdf_translations"),
+            object_sdf_scales=extra.get("object_sdf_scales"),
             object_goal=extra.get("object_goal"),
             motion_state=extra.get("motion_state"),
             motion_state_mask=extra.get("motion_state_mask"),
@@ -368,6 +373,10 @@ def train_ddp(rank, world_size, cfg):
                 object_norm_min=extra.get("object_norm_min"),
                 object_norm_max=extra.get("object_norm_max"),
                 object_geometry_normalized=extra.get("object_geometry_normalized"),
+                object_sdf_ids=extra.get("object_sdf_ids"),
+                object_sdf_rotations=extra.get("object_sdf_rotations"),
+                object_sdf_translations=extra.get("object_sdf_translations"),
+                object_sdf_scales=extra.get("object_sdf_scales"),
                 object_goal=extra.get("object_goal"),
                 motion_state=extra.get("motion_state"),
                 motion_state_mask=extra.get("motion_state_mask"),

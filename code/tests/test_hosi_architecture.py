@@ -7,7 +7,6 @@ from models.synhsi import (
     HumanSceneInteractionEncoder,
     Unet,
     decode_bps_surface_points,
-    human_object_collision_loss,
     temporal_upsample,
 )
 
@@ -266,32 +265,3 @@ def test_human_scene_interaction_encoder_uses_body_and_scene():
     assert torch.isfinite(token_empty).all()
     assert token_no_scene.abs().max().item() == 0.0
     assert not torch.allclose(token_a, token_b)
-
-
-def test_human_object_collision_loss_penalizes_close_points():
-    human = torch.zeros(1, 2, 6)
-    valid_mask = torch.ones(1, 2, dtype=torch.bool)
-    object_present = torch.tensor([True])
-
-    close_object = torch.zeros(1, 4, 3)
-    far_object = torch.full((1, 4, 3), 10.0)
-
-    close_loss = human_object_collision_loss(
-        human,
-        close_object,
-        object_present,
-        valid_mask,
-        margin=0.2,
-        max_object_points=4,
-    )
-    far_loss = human_object_collision_loss(
-        human,
-        far_object,
-        object_present,
-        valid_mask,
-        margin=0.2,
-        max_object_points=4,
-    )
-
-    assert close_loss.item() > 0.0
-    assert far_loss.item() == 0.0

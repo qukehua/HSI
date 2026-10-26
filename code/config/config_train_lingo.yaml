@@ -65,8 +65,9 @@ use_human_object_cross_query: true
 use_bps_object_geometry: true
 human_object_query_num_points: 64
 human_object_query_joint_ids: null
-human_object_collision_margin: 0.05
-human_object_collision_num_points: 128
+human_object_query_margin: 0.05  # normalized cross-query feature only
+human_object_collision_mode: disabled
+human_object_penetration_tolerance_m: 0.0
 human_object_collision_joint_ids: null
 
 # Auxiliary loss switches and weights (passed to sampler.pelvis).
@@ -75,7 +76,7 @@ completion_pos_weight: 32.0
 aux_loss_weights:
   pelvis_traj: 0.5
   completion: 0.2
-  human_object_collision: 0.3
+  human_object_collision: 0  # no object geometry supplied
 
 dataset:
   split: train

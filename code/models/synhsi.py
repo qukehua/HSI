@@ -7,6 +7,7 @@ from vit_pytorch import ViT
 from tqdm import tqdm
 from utils import *
 from bps_utils import make_bps_basis
+from object_sdf import ObjectSDFStore, human_object_collision_loss
 
 
 class Sampler:
@@ -43,13 +44,24 @@ class Sampler:
         self.debug_sampling = kwargs.get('debug_sampling', False)
         self.use_motion_state = kwargs.get('use_motion_state', False)
         self.motion_state_len = int(kwargs.get('motion_state_len', 0) or 0)
-        self.human_object_collision_margin = float(kwargs.get('human_object_collision_margin', 0.05))
-        self.human_object_collision_num_points = int(kwargs.get('human_object_collision_num_points', 128))
+        self.human_object_collision_mode = str(kwargs.get('human_object_collision_mode', 'sdf'))
+        if self.human_object_collision_mode not in ('sdf', 'disabled'):
+            raise ValueError("human_object_collision_mode must be 'sdf' or 'disabled'.")
+        self.human_object_penetration_tolerance_m = float(kwargs.get('human_object_penetration_tolerance_m', 0.0))
+        if self.human_object_penetration_tolerance_m < 0:
+            raise ValueError("human_object_penetration_tolerance_m must be nonnegative.")
+        self.object_sdf_store = None
         self.human_object_collision_joint_ids = kwargs.get('human_object_collision_joint_ids', None)
         self.get_scheduler()
 
     def set_dataset_and_model(self, dataset, model):
         self.dataset = dataset
+        if (self.use_aux_losses and self.aux_loss_weights.get('human_object_collision', 0.0) > 0
+                and self.human_object_collision_mode == 'sdf'):
+            if not getattr(dataset, 'load_object_sdf', False):
+                raise ValueError("SDF collision loss is enabled but the dataset supplies no SDF geometry. "
+                                 "Supply SDFs or explicitly disable the collision loss.")
+            self.object_sdf_store = ObjectSDFStore(dataset.object_sdf_dir)
         if dataset.load_scene:
             self.grid = dataset.create_meshgrid(batch_size=self.batch_size).to(self.device)
         self.model = model
@@ -131,6 +143,10 @@ class Sampler:
             noise=None,
             loss_type='huber',
             return_loss_dict=False,
+            object_sdf_ids=None,
+            object_sdf_rotations=None,
+            object_sdf_translations=None,
+            object_sdf_scales=None,
     ):
         if noise is None:
             noise = torch.randn_like(x_start)
@@ -246,6 +262,7 @@ class Sampler:
             "pelvis_traj": zero_loss,
             "completion": zero_loss,
             "human_object_collision": zero_loss,
+            "human_object_collision_coverage": zero_loss,
             "pelvis_traj_weighted": zero_loss,
             "completion_weighted": zero_loss,
             "human_object_collision_weighted": zero_loss,
@@ -278,21 +295,23 @@ class Sampler:
                 completion_target,
                 pos_weight=pos_weight,
             )
-            pred_x0 = self.predict_x0_from_field(x_noisy, t, predicted_field)
-            collision_geometry = (
-                model_out.get("object_surface_points", object_points)
-                if isinstance(model_out, dict)
-                else object_points
-            )
-            human_object_collision_loss_value = human_object_collision_loss(
-                pred_x0,
-                object_points=collision_geometry,
-                object_present=object_present,
-                valid_mask=valid_mask,
-                margin=self.human_object_collision_margin,
-                max_object_points=self.human_object_collision_num_points,
-                joint_ids=self.human_object_collision_joint_ids,
-            )
+            human_object_collision_loss_value = zero_loss
+            collision_coverage = zero_loss
+            if (self.human_object_collision_mode == 'sdf'
+                    and self.aux_loss_weights.get('human_object_collision', 0.0) > 0):
+                pred_x0 = self.predict_x0_from_field(x_noisy, t, predicted_field)
+                human_object_collision_loss_value, collision_coverage = human_object_collision_loss(
+                    pred_x0, self.object_sdf_store,
+                    object_sdf_ids=object_sdf_ids,
+                    object_sdf_rotations=object_sdf_rotations,
+                    object_sdf_translations=object_sdf_translations,
+                    object_sdf_scales=object_sdf_scales,
+                    object_present=object_present, valid_mask=valid_mask,
+                    norm_min=object_norm_min, norm_max=object_norm_max,
+                    motion_normalized=object_geometry_normalized,
+                    tolerance_m=self.human_object_penetration_tolerance_m,
+                    joint_ids=self.human_object_collision_joint_ids, return_coverage=True,
+                )
 
             pelvis_weighted = self.aux_loss_weights.get('pelvis_traj', 0.5) * pelvis_loss
             completion_weighted = self.aux_loss_weights.get('completion', 0.2) * completion_loss
@@ -312,6 +331,7 @@ class Sampler:
                     "pelvis_traj": pelvis_loss,
                     "completion": completion_loss,
                     "human_object_collision": human_object_collision_loss_value,
+                    "human_object_collision_coverage": collision_coverage,
                     "pelvis_traj_weighted": pelvis_weighted,
                     "completion_weighted": completion_weighted,
                     "human_object_collision_weighted": human_object_collision_weighted,
@@ -762,66 +782,6 @@ def _prepare_object_points(
         ).round().long()
         object_points = object_points.index_select(-2, sample_idx)
     return object_points
-
-
-def human_object_collision_loss(
-        human_motion: torch.Tensor,
-        object_points: Optional[torch.Tensor],
-        object_present: Optional[torch.Tensor],
-        valid_mask: Optional[torch.Tensor],
-        margin: float = 0.05,
-        max_object_points: int = 128,
-        joint_ids=None,
-) -> torch.Tensor:
-    zero = human_motion.new_zeros(())
-    if margin <= 0.0 or object_points is None:
-        return zero
-    batch_size, seq_len, motion_dim = human_motion.shape
-    if motion_dim % 3 != 0:
-        return zero
-
-    object_mask = _batch_bool_mask(object_present, batch_size, human_motion.device, default=False)
-    if not bool(object_mask.any()):
-        return zero
-
-    num_joints = motion_dim // 3
-    human_points = human_motion.reshape(batch_size, seq_len, num_joints, 3)
-    selected_joint_ids = _joint_ids_tensor(joint_ids, num_joints, human_motion.device)
-    if selected_joint_ids is not None:
-        human_points = human_points.index_select(2, selected_joint_ids)
-
-    sampled_object_points = _prepare_object_points(
-        object_points,
-        batch_size=batch_size,
-        device=human_motion.device,
-        dtype=human_motion.dtype,
-        max_object_points=max_object_points,
-    )
-    if sampled_object_points is None or sampled_object_points.shape[-2] == 0:
-        return zero
-
-    if sampled_object_points.ndim == 3:
-        object_for_distance = sampled_object_points[:, None, None, :, :]
-    else:
-        if sampled_object_points.shape[1] == 1 and seq_len > 1:
-            sampled_object_points = sampled_object_points.repeat(1, seq_len, 1, 1)
-        if sampled_object_points.shape[1] != seq_len:
-            raise ValueError(
-                f"Dynamic object geometry has {sampled_object_points.shape[1]} frames; expected {seq_len}."
-            )
-        object_for_distance = sampled_object_points[:, :, None, :, :]
-    diff = human_points.unsqueeze(3) - object_for_distance
-    min_dist = torch.sqrt(diff.pow(2).sum(dim=-1).clamp_min(1e-12)).min(dim=-1).values
-    penetration = (float(margin) - min_dist).clamp_min(0.0).pow(2)
-
-    valid = torch.ones(batch_size, seq_len, device=human_motion.device, dtype=human_motion.dtype)
-    if valid_mask is not None:
-        valid = valid_mask.to(device=human_motion.device, dtype=human_motion.dtype)
-    mask = valid.unsqueeze(-1) * object_mask.to(human_motion.dtype).view(batch_size, 1, 1)
-    denom = mask.sum() * human_points.shape[2]
-    if denom <= 0:
-        return zero
-    return (penetration * mask).sum() / denom.clamp_min(1.0)
 
 
 class MotionStateEncoder(nn.Module):

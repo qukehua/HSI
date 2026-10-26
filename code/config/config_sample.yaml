@@ -63,8 +63,9 @@ use_human_object_cross_query: true
 use_bps_object_geometry: true
 human_object_query_num_points: 64
 human_object_query_joint_ids: null
-human_object_collision_margin: 0.05
-human_object_collision_num_points: 128
+human_object_query_margin: 0.05
+human_object_collision_mode: disabled
+human_object_penetration_tolerance_m: 0.0
 human_object_collision_joint_ids: null
 
 use_aux_losses: false

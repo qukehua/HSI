@@ -27,6 +27,10 @@ train_file: train_diffusion_manip_window_120_cano_joints24.p
 test_file: test_diffusion_manip_window_120_processed_joints24.p
 stats_file: min_max_mean_std_data_window_120_cano_joints24.p
 object_mesh_dir: captured_objects
+load_object_sdf: false  # enabled by the SDF training configuration
+object_sdf_dir: rest_object_sdf_256_npy_files
+# Articulated objects require separate top/bottom SDFs, absent from the release.
+object_sdf_excluded_objects: [mop, vacuum]
 load_train: true
 load_test: false
 max_train_samples: 0
