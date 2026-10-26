@@ -5,7 +5,7 @@
 # Files, directories, or globs produced by sample.py or your own sampler.
 # Required. Fill this before running without --generated.
 generated: [/share/qkh/humoworld/results/outputs_test/**/*.pkl]
-# Randomly sample 100 idx; each idx keeps all repeats (30) for 3000 total samples.
+# Randomly sample 100 idx; each idx keeps all repeats (50) for 5000 total samples.
 generated_max_idx: 100
 generated_sample_seed: 42
 

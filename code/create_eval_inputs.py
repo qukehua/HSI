@@ -373,7 +373,7 @@ def main():
 
     print(f"Saved {len(rows)} {args.split} input pkl files to {output_dir}")
     print(f"Manifest: {manifest_path}")
-    print("Run sample.py with mm_num_repeats=30 to generate 30 outputs per input.")
+    print("Run sample.py with mm_num_repeats=50 to generate 50 outputs per input.")
 
 
 if __name__ == "__main__":
