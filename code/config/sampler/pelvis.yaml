@@ -8,7 +8,7 @@ pelvis:
   auto_regre_num: ${auto_regre_num}
   use_motion_state: ${use_motion_state}
   motion_state_len: ${motion_state_len}
-  timesteps: 50
+  timesteps: 100
   objective: flow_matching
   beta_schedule: linear
   beta_schedule_s: 0.008
